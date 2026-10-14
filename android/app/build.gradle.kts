@@ -11,6 +11,10 @@ android {
     buildFeatures { compose = true }
     compileOptions { sourceCompatibility = JavaVersion.VERSION_17; targetCompatibility = JavaVersion.VERSION_17 }
     kotlinOptions { jvmTarget = "17" }
+    signingConfigs.getByName("debug") {
+        val location = System.getenv("CARSYNC_KEYSTORE")
+        if (location != null && file(location).exists()) { storeFile = file(location); storePassword = "android"; keyAlias = "androiddebugkey"; keyPassword = "android" }
+    }
     buildTypes { release { isMinifyEnabled = false } }
     packaging { resources.excludes += "/META-INF/{AL2.0,LGPL2.1}" }
 }
