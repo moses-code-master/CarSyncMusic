@@ -111,7 +111,7 @@ class PlaybackRuntimeTest {
             await("Shared seek/play failed") { sync.state.value.positionMs > 15000 && guest.state.value.positionMs > 15000 && guest.state.value.playing }
             main { guest.detach(); p.release(); p = ExoPlayer.Builder(context).build(); guest.attach(p) }
             await("Guest reconnect playback failed") { guest.state.value.connected && guest.state.value.playing && guest.state.value.positionMs > 15000 }
-        } finally { main { guest.leave(); p.release() }; db.close(); main { sync.endSession() }; await("Host session cleanup") { sync.state.value.code.isBlank() } }
+        } finally { main { guest.leave(); guest.shutdown(); p.release() }; db.close(); main { sync.endSession() }; await("Host session cleanup") { sync.state.value.code.isBlank() } }
     }
     @Test fun missingGuestFileStaysSilentUntilPermittedRelayIsAvailable() {
         main { sync.configure("http://10.0.2.2:8080", "Relay host"); sync.create() }
@@ -133,6 +133,6 @@ class PlaybackRuntimeTest {
             main { sync.uploadMissingAudio() }; await("Upload did not complete") { sync.state.value.message.contains("Audio relay ready") }
             main { guest.retryAudio() }; await("Relay MP3 did not decode/play") { guest.state.value.playing && guest.state.value.positionMs > 1000 }
             main { sync.settings(sharing = false) }; await("Revocation did not stop guest") { guest.state.value.missing && !guest.state.value.playing }
-        } finally { main { guest.leave(); p.release() }; db.close(); main { sync.endSession() }; await("Host session cleanup") { sync.state.value.code.isBlank() } }
+        } finally { main { guest.leave(); guest.shutdown(); p.release() }; db.close(); main { sync.endSession() }; await("Host session cleanup") { sync.state.value.code.isBlank() } }
     }
 }

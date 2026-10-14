@@ -1,6 +1,7 @@
 **/node_modules/
 **/build/
 **/.gradle/
+**/.kotlin/
 **/local.properties
 **/data/
 *.jks

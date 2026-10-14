@@ -46,6 +46,7 @@ class MainActivity : ComponentActivity() {
     private val sync get() = (application as CarSyncApp).sync
     override fun onCreate(savedInstanceState: Bundle?) {
         super.onCreate(savedInstanceState)
+        volumeControlStream = android.media.AudioManager.STREAM_MUSIC
         if (Build.VERSION.SDK_INT >= 33) registerForActivityResult(ActivityResultContracts.RequestPermission()) {}.launch(Manifest.permission.POST_NOTIFICATIONS)
         acceptLink(intent)
         setContent { CarSyncScreen(sync) }

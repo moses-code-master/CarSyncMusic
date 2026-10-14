@@ -63,8 +63,9 @@ class SyncCoordinator(private val context: Context, val dao: LibraryDao, prefere
         scope.launch { dao.observePlaylists().collect { list -> update { it.copy(playlists = list) } } }
     }
     fun attach(p: ExoPlayer) {
-        player = p; preparedHash = ""; activeRevision = -1; p.volume = state.value.volume
-        update { it.copy(serviceReady = true) }
+        player = p; preparedHash = ""; activeRevision = -1; p.volume = 1f
+        val audio = context.getSystemService(Context.AUDIO_SERVICE) as android.media.AudioManager
+        update { it.copy(serviceReady = true, volume = audio.getStreamVolume(android.media.AudioManager.STREAM_MUSIC).toFloat() / audio.getStreamMaxVolume(android.media.AudioManager.STREAM_MUSIC).coerceAtLeast(1)) }
         p.addListener(object : Player.Listener {
             override fun onPlayerError(error: PlaybackException) {
                 preparedHash = ""
@@ -74,7 +75,7 @@ class SyncCoordinator(private val context: Context, val dao: LibraryDao, prefere
             override fun onPlaybackStateChanged(playbackState: Int) {
                 if (playbackState == Player.STATE_READY && clock.ready) desired?.let { if (serverNow() >= it.executeAt) apply(it) }
                 if (playbackState == Player.STATE_ENDED) {
-                    if (state.value.role == "local") { if (state.value.index < state.value.queue.lastIndex) command("next"); return }
+                    if (state.value.role == "local") { if (state.value.index < state.value.queue.lastIndex) command("next") else update { it.copy(requestedPlaying = false) }; return }
                     val f = desired ?: return
                     if (state.value.role == "host" && f.revision != endedRevision) { endedRevision = f.revision; command("ended", revision = f.revision, index = f.index) }
                 }
@@ -85,6 +86,7 @@ class SyncCoordinator(private val context: Context, val dao: LibraryDao, prefere
         loops?.cancel(); loops = scope.launch { while (isActive) { tick(); delay(250) } }
     }
     fun detach() { player = null; preparedHash = ""; activeRevision = -1; loops?.cancel(); scheduleJob?.cancel(); generation++; ws?.close(1000, "Service stopped"); ws = null; reconnect?.cancel(); update { it.copy(connected = false, playing = false, serviceReady = false) } }
+    fun shutdown() { detach(); scope.cancel() }
     fun configure(endpoint: String, name: String) {
         require(!state.value.connected && state.value.code.isBlank()) { "Leave the current session before changing the server" }
         val clean = endpoint.trim().trimEnd('/')
@@ -288,7 +290,11 @@ class SyncCoordinator(private val context: Context, val dao: LibraryDao, prefere
         if (state.value.driving || !state.value.connected || state.value.role != "host") return
         send(JSONObject().put("type", "settings").put("guestControls", guestControls).put("sharing", sharing).put("repeat", repeat))
     }
-    fun volume(v: Float) { player?.volume = v; update { it.copy(volume = v) } }
+    fun volume(v: Float) {
+        val audio = context.getSystemService(Context.AUDIO_SERVICE) as android.media.AudioManager
+        audio.setStreamVolume(android.media.AudioManager.STREAM_MUSIC, (v * audio.getStreamMaxVolume(android.media.AudioManager.STREAM_MUSIC)).toInt(), 0)
+        player?.volume = 1f; update { it.copy(volume = v) }
+    }
     fun driving(v: Boolean) { prefs.edit().putBoolean("driving", v).apply(); update { it.copy(driving = v) } }
     fun latency(ms: Long) { prefs.edit().putLong("latency", ms.coerceIn(0, 2000)).apply(); update { it.copy(latencyMs = ms.coerceIn(0, 2000)) } }
     fun importFiles(uris: List<Uri>) {
