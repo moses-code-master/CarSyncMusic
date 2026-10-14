@@ -1,7 +1,7 @@
 Picked up JAVA_TOOL_OPTIONS: -Djavax.net.ssl.trustStoreType=Windows-ROOT -Djavax.net.ssl.trustStore=NONE
 To honour the JVM settings for this build a single-use Daemon process will be forked. For more on this, please refer to https://docs.gradle.org/8.11.1/userguide/gradle_daemon.html#sec:disabling_the_daemon in the Gradle documentation.
 Daemon will be stopped at the end of the build
-Checking the license for package Android SDK Platform-Tools in C:\Users\USER\Documents\Codex\2026-10-14\files-pasted-by-the-user-build\work\toolchain\sdk\licenses
+Checking the license for package Android SDK Platform-Tools in <workspace>\work\toolchain\sdk\licenses
 Warning: License for package Android SDK Platform-Tools not accepted.
 WARNING: platform-tools package is not installed. Please accept the installation licence to continue
 > Task :app:preBuild UP-TO-DATE
@@ -45,7 +45,7 @@ Unable to strip the following libraries, packaging them as they are: libandroidx
 > Task :app:kaptGenerateStubsDebugKotlin
 > Task :app:kaptDebugKotlin
 > Task :app:compileDebugKotlin
-w: file:///C:/Users/USER/Documents/Codex/2026-10-14/files-pasted-by-the-user-build/outputs/CarSyncMusic/android/app/src/main/java/app/carsync/music/SyncCoordinator.kt:109:192 'fun create(contentType: MediaType?, content: String): RequestBody' is deprecated. Moved to extension function. Put the 'content' argument first to fix Java.
+w: file:///<workspace>/outputs/CarSyncMusic/android/app/src/main/java/app/carsync/music/SyncCoordinator.kt:109:192 'fun create(contentType: MediaType?, content: String): RequestBody' is deprecated. Moved to extension function. Put the 'content' argument first to fix Java.
 
 > Task :app:compileDebugJavaWithJavac
 Picked up JAVA_TOOL_OPTIONS: -Djavax.net.ssl.trustStoreType=Windows-ROOT -Djavax.net.ssl.trustStore=NONE
