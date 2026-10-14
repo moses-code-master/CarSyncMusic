@@ -261,9 +261,9 @@ private val pages = listOf("Home", "Music Library", "Playlists", "Create Session
     val t = s.track
     if (t == null) { Title("Ready for the road", "Import MP3s, publish a playlist, then press play."); return }
     BoxWithConstraints {
-        val wide = maxWidth > 680.dp
+        val wide = maxWidth > 500.dp
         val art = s.library.find { it.hash == t.hash }?.artPath
-        if (wide) Row(horizontalArrangement = Arrangement.spacedBy(24.dp)) { Artwork(art, Modifier.size(260.dp)); Column(Modifier.weight(1f)) { PlaybackControls(s, sync) } }
+        if (wide) Row(horizontalArrangement = Arrangement.spacedBy(24.dp)) { Artwork(art, Modifier.size(140.dp)); Column(Modifier.weight(1f)) { PlaybackControls(s, sync, compact = true) } }
         else Column(verticalArrangement = Arrangement.spacedBy(16.dp)) { Artwork(art, Modifier.fillMaxWidth().height(140.dp)); PlaybackControls(s, sync) }
     }
     if (!s.driving) {
@@ -281,19 +281,19 @@ private val pages = listOf("Home", "Music Library", "Playlists", "Create Session
         }
     }
 }
-@Composable private fun PlaybackControls(s: AppState, sync: SyncCoordinator) {
+@Composable private fun PlaybackControls(s: AppState, sync: SyncCoordinator, compact: Boolean = false) {
     val t = s.track ?: return
-    Text(if (s.buffering) "BUFFERING" else if (s.connected && s.clockReady) "CONNECTED PLAYBACK" else "${s.role.uppercase()} PLAYBACK", color = Accent, fontSize = 13.sp)
-    Text(t.title, fontSize = 26.sp, fontWeight = FontWeight.Bold, maxLines = 2)
-    Text(t.artist, fontSize = 18.sp, color = Muted)
+    if (!compact) Text(if (s.buffering) "BUFFERING" else if (s.connected && s.clockReady) "CONNECTED PLAYBACK" else "${s.role.uppercase()} PLAYBACK", color = Accent, fontSize = 13.sp)
+    Text(t.title, fontSize = if (compact) 20.sp else 26.sp, fontWeight = FontWeight.Bold, maxLines = if (compact) 1 else 2, overflow = TextOverflow.Ellipsis)
+    if (!compact) Text(t.artist, fontSize = 18.sp, color = Muted)
     var seeking by remember { mutableStateOf<Float?>(null) }
-    if (!s.driving) Slider(value = seeking ?: s.positionMs.toFloat().coerceIn(0f, t.durationMs.toFloat()), onValueChange = { seeking = it }, onValueChangeFinished = { seeking?.let { sync.command("seek", it.toLong()) }; seeking = null }, valueRange = 0f..t.durationMs.toFloat().coerceAtLeast(1f), enabled = s.canControl, modifier = Modifier.height(56.dp))
-    Text("${time(s.positionMs)} / ${time(t.durationMs)}", color = Muted)
-    Row(verticalAlignment = Alignment.CenterVertically, horizontalArrangement = Arrangement.spacedBy(20.dp), modifier = Modifier.padding(vertical = 12.dp)) {
+    Row(verticalAlignment = Alignment.CenterVertically, horizontalArrangement = Arrangement.spacedBy(20.dp), modifier = Modifier.padding(vertical = if (compact) 4.dp else 12.dp)) {
         IconButton({ sync.command("previous") }, Modifier.size(64.dp), enabled = s.canControl) { Icon(painterResource(R.drawable.ic_previous), "Previous track", Modifier.size(40.dp)) }
-        FilledIconButton({ sync.command(if (s.requestedPlaying) "pause" else "play") }, Modifier.size(96.dp), enabled = s.canControl && !s.missing && s.serviceReady) { Icon(painterResource(if (s.requestedPlaying) R.drawable.ic_pause else R.drawable.ic_play), "Play or pause", Modifier.size(48.dp)) }
+        FilledIconButton({ sync.command(if (s.requestedPlaying) "pause" else "play") }, Modifier.size(if (compact) 64.dp else 96.dp), enabled = s.canControl && !s.missing && s.serviceReady) { Icon(painterResource(if (s.requestedPlaying) R.drawable.ic_pause else R.drawable.ic_play), "Play or pause", Modifier.size(48.dp)) }
         IconButton({ sync.command("next") }, Modifier.size(64.dp), enabled = s.canControl) { Icon(painterResource(R.drawable.ic_next), "Next track", Modifier.size(40.dp)) }
     }
+    if (!s.driving) Slider(value = seeking ?: s.positionMs.toFloat().coerceIn(0f, t.durationMs.toFloat()), onValueChange = { seeking = it }, onValueChangeFinished = { seeking?.let { sync.command("seek", it.toLong()) }; seeking = null }, valueRange = 0f..t.durationMs.toFloat().coerceAtLeast(1f), enabled = s.canControl, modifier = Modifier.height(if (compact) 32.dp else 56.dp))
+    Text("${time(s.positionMs)} / ${time(t.durationMs)}", color = Muted)
     Text("Local volume", color = Muted)
     Slider(s.volume, { sync.volume(it) }, modifier = Modifier.height(56.dp))
     if (s.audioError.isNotBlank()) Text(s.audioError, color = Color(0xFFFFB19F))
