@@ -1,0 +1,19 @@
+
+> carsync-server@1.0.0 test
+> node --test test/*.test.mjs
+
+✔ scheduled timeline preserves elapsed time, pause, seek and late-join position (2.3899ms)
+✔ two cars receive identical ordered playlist, play/pause/seek/skip deadlines and dedup (9644.2228ms)
+✔ guest authorization, clock timestamps and authenticated reconnect snapshot (223.7133ms)
+✔ audio opt-in, host-only upload, hash integrity, authenticated range streaming and revocation (196.043ms)
+✔ session capacity, missing audio and malformed playlists produce clear errors (156.4196ms)
+✔ server advances playback when the host process disappears; telemetry records reconnects (301.8046ms)
+✔ backend restart retains identities and playlist but safely pauses the recovered timeline (100.1874ms)
+ℹ tests 7
+ℹ suites 0
+ℹ pass 7
+ℹ fail 0
+ℹ cancelled 0
+ℹ skipped 0
+ℹ todo 0
+ℹ duration_ms 10966.5635

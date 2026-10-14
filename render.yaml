@@ -1,0 +1,14 @@
+# Free trial selected by the user. Storage is temporary; sessions/media can be lost.
+# Schema: https://render.com/docs/blueprint-spec
+services:
+  - type: web
+    name: carsync-music-server
+    runtime: docker
+    plan: free
+    rootDir: backend
+    dockerfilePath: ./Dockerfile
+    healthCheckPath: /health
+    numInstances: 1
+    envVars:
+      - key: DATA_DIR
+        value: /app/data

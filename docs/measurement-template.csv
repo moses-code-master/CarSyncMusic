@@ -1,0 +1,11 @@
+scenario,host_model,guest_model,android_versions,output_paths,network,host_latency_ms,guest_latency_ms,acoustic_median_ms,acoustic_p95_ms,acoustic_max_ms,stable_recovery_ms,disconnects_per_hour,pass,notes
+simultaneous_start,,,,,,,,,,,,,,
+pause,,,,,,,,,,,,,,
+skip_seek,,,,,,,,,,,,,,
+guest_reconnect,,,,,,,,,,,,,,
+wifi_to_mobile,,,,,,,,,,,,,,
+slow_processor,,,,,,,,,,,,,,
+matching_files,,,,,,,,,,,,,,
+missing_file,,,,,,,,,,,,,,
+host_force_stop,,,,,,,,,,,,,,
+late_join,,,,,,,,,,,,,,

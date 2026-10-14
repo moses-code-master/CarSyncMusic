@@ -1,0 +1,9 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<testsuite name="app.carsync.music.SyncMathTest" tests="3" skipped="0" failures="0" errors="0" timestamp="2026-10-14T11:47:30" hostname="X360" time="0.17">
+  <properties/>
+  <testcase name="positionsAndCorrection" classname="app.carsync.music.SyncMathTest" time="0.033"/>
+  <testcase name="rejectsPublicHostsMasqueradingAsPrivatePrefixes" classname="app.carsync.music.SyncMathTest" time="0.082"/>
+  <testcase name="asymmetricClockAndOutlier" classname="app.carsync.music.SyncMathTest" time="0.053"/>
+  <system-out><![CDATA[]]></system-out>
+  <system-err><![CDATA[]]></system-err>
+</testsuite>

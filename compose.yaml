@@ -1,0 +1,23 @@
+services:
+  sync:
+    build: ./backend
+    restart: unless-stopped
+    environment:
+      DATA_DIR: /app/data
+      PORT: 8080
+      PUBLIC_URL: https://${DOMAIN:-music.example.com}
+    volumes:
+      - sessions:/app/data
+  proxy:
+    image: caddy:2-alpine
+    restart: unless-stopped
+    environment:
+      DOMAIN: ${DOMAIN:-music.example.com}
+    ports: ["80:80", "443:443"]
+    volumes:
+      - ./deploy/Caddyfile:/etc/caddy/Caddyfile:ro
+      - certificates:/data
+    depends_on: [sync]
+volumes:
+  sessions:
+  certificates:

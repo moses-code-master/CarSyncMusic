@@ -1,0 +1,316 @@
+package app.carsync.music
+
+import android.content.Context
+import android.net.Uri
+import android.os.SystemClock
+import androidx.media3.common.*
+import androidx.media3.exoplayer.ExoPlayer
+import kotlinx.coroutines.*
+import kotlinx.coroutines.flow.*
+import okhttp3.*
+import okhttp3.MediaType.Companion.toMediaType
+import okhttp3.HttpUrl.Companion.toHttpUrlOrNull
+import org.json.*
+import java.io.IOException
+import java.util.UUID
+import kotlin.math.abs
+
+data class RemoteTrack(val hash: String, val title: String, val artist: String, val album: String, val durationMs: Long)
+data class Car(val name: String, val role: String, val online: Boolean, val driftMs: Long?, val rttMs: Long?, val buffered: Boolean, val missing: Boolean)
+data class AppState(
+    val endpoint: String = "", val carName: String = "My car", val code: String = "", val role: String = "", val connected: Boolean = false,
+    val library: List<Track> = emptyList(), val playlists: List<SavedPlaylist> = emptyList(), val queue: List<RemoteTrack> = emptyList(), val cars: List<Car> = emptyList(),
+    val index: Int = 0, val positionMs: Long = 0, val playing: Boolean = false, val buffering: Boolean = false, val missing: Boolean = false,
+    val clockReady: Boolean = false, val driftMs: Long? = null, val rttMs: Long = 0, val volume: Float = 0.8f,
+    val guestControls: Boolean = false, val sharing: Boolean = false, val repeat: String = "off", val driving: Boolean = false,
+    val latencyMs: Long = 0, val message: String = "Import MP3s and create or join a session.", val busy: Boolean = false,
+    val invitationCode: String = "", val invitationServer: String = ""
+) { val canControl get() = role == "host" || role == "local" || guestControls; val track get() = queue.getOrNull(index) }
+
+class SyncCoordinator(private val context: Context, val dao: LibraryDao) {
+    private val prefs = context.getSharedPreferences("session", Context.MODE_PRIVATE)
+    private val scope = CoroutineScope(SupervisorJob() + Dispatchers.Main.immediate)
+    val http = OkHttpClient.Builder().connectTimeout(10, java.util.concurrent.TimeUnit.SECONDS).readTimeout(30, java.util.concurrent.TimeUnit.SECONDS).pingInterval(10, java.util.concurrent.TimeUnit.SECONDS).build()
+    private val mutable = MutableStateFlow(AppState(endpoint = prefs.getString("endpoint", "")!!, carName = prefs.getString("name", "My car")!!, code = prefs.getString("code", "")!!, role = prefs.getString("role", "")!!, latencyMs = prefs.getLong("latency", 0), driving = prefs.getBoolean("driving", false)))
+    val state: StateFlow<AppState> = mutable.asStateFlow()
+    private var bearer = prefs.getString("token", "")!!
+    private var ws: WebSocket? = null
+    private var generation = 0
+    private var attempts = 0
+    private var reconnect: Job? = null
+    private var loops: Job? = null
+    private var scheduleJob: Job? = null
+    private var player: ExoPlayer? = null
+    private val clock = ClockEstimator()
+    private var desired: PlaybackFrame? = null
+    private var previous: PlaybackFrame? = null
+    private var activeRevision = -1L
+    private var preparedHash = ""
+    private var endedRevision = -1L
+    private var lastStatus = 0L
+    private var lastHardSeek = 0L
+    private val pings = mutableSetOf<Double>()
+    private fun localNow() = SystemClock.elapsedRealtime().toDouble()
+    private fun serverNow() = localNow() + clock.offsetMs
+    private fun update(f: (AppState) -> AppState) { mutable.value = f(mutable.value) }
+    fun message(text: String) { update { it.copy(message = text) } }
+    fun invitation(uri: Uri) {
+        if (uri.scheme == "carsync" && uri.host == "join") update { it.copy(invitationCode = uri.getQueryParameter("code") ?: "", invitationServer = uri.getQueryParameter("server") ?: "", message = "Review the invitation server address before joining.") }
+    }
+    init {
+        scope.launch { dao.observeTracks().collect { list -> update { it.copy(library = list) }; if (state.value.missing) desired?.let { schedule(it, true) } } }
+        scope.launch { dao.observePlaylists().collect { list -> update { it.copy(playlists = list) } } }
+    }
+    fun attach(p: ExoPlayer) {
+        player = p; p.volume = state.value.volume
+        p.addListener(object : Player.Listener {
+            override fun onPlayerError(error: PlaybackException) { preparedHash = ""; message("Audio unavailable: ${error.errorCodeName}. Check storage or ask the host to upload the track.") }
+            override fun onPlaybackStateChanged(playbackState: Int) {
+                if (playbackState == Player.STATE_READY && clock.ready) desired?.let { if (serverNow() >= it.executeAt) apply(it) }
+                if (playbackState == Player.STATE_ENDED) {
+                    if (state.value.role == "local") { if (state.value.index < state.value.queue.lastIndex) command("next"); return }
+                    val f = desired ?: return
+                    if (state.value.role == "host" && f.revision != endedRevision) { endedRevision = f.revision; command("ended", revision = f.revision, index = f.index) }
+                }
+            }
+        })
+        if (bearer.isNotBlank()) connect()
+        loops?.cancel(); loops = scope.launch { while (isActive) { tick(); delay(250) } }
+    }
+    fun detach() { player = null; loops?.cancel(); scheduleJob?.cancel(); generation++; ws?.close(1000, "Service stopped"); ws = null; reconnect?.cancel(); update { it.copy(connected = false, playing = false) } }
+    fun configure(endpoint: String, name: String) {
+        require(!state.value.connected && state.value.code.isBlank()) { "Leave the current session before changing the server" }
+        val clean = endpoint.trim().trimEnd('/')
+        val url = clean.toHttpUrlOrNull() ?: error("Enter a full http:// or https:// server address")
+        require(url.encodedPath == "/" && url.query == null && url.username.isEmpty() && url.password.isEmpty()) { "Use the server root address without paths or credentials" }
+        require(url.isHttps || isLanHost(url.host)) { "Public servers require HTTPS. HTTP is allowed only on a private network." }
+        prefs.edit().putString("endpoint", clean).putString("name", name.take(40)).apply(); update { it.copy(endpoint = clean, carName = name.take(40)) }
+    }
+    fun create() = establish(null)
+    fun join(code: String) = establish(code)
+    private fun establish(code: String?) {
+        if (state.value.driving) { message("Park before connecting a session."); return }
+        if (state.value.code.isNotBlank()) { message("Leave the existing session first."); return }
+        if (state.value.endpoint.isBlank()) { message("Set your server address in Settings first."); return }
+        if (code != null && !code.matches(Regex("\\d{6}"))) { message("Enter the six-digit session code."); return }
+        scope.launch {
+            update { it.copy(busy = true) }
+            try {
+                val path = if (code == null) "/sessions" else "/sessions/$code/join"
+                val result = withContext(Dispatchers.IO) { request(path, "POST", JSONObject().put("name", state.value.carName)) }
+                bearer = result.getString("token")
+                prefs.edit().putString("token", bearer).putString("code", result.getString("code")).putString("role", result.getString("role")).apply()
+                update { it.copy(code = result.getString("code"), role = result.getString("role"), message = "Connecting session…") }; connect()
+            } catch (e: Exception) { message(e.message ?: "Cannot reach server") }
+            finally { update { it.copy(busy = false) } }
+        }
+    }
+    private fun request(path: String, method: String, body: JSONObject? = null): JSONObject {
+        val req = Request.Builder().url(state.value.endpoint + path).header("Authorization", "Bearer $bearer").method(method, if (method == "GET" || method == "DELETE") null else RequestBody.create("application/json".toMediaType(), body.toString())).build()
+        http.newCall(req).execute().use { response -> val result = JSONObject(response.body?.string() ?: "{}"); if (!response.isSuccessful) error(result.optString("error", "Server error ${response.code}")); return result }
+    }
+    private fun connect() {
+        if (bearer.isBlank() || player == null) return
+        reconnect?.cancel(); val gen = ++generation; clock.reset(); pings.clear(); activeRevision = -1
+        update { it.copy(connected = false, clockReady = false, message = "Connecting…") }
+        ws?.close(1000, "Reconnect")
+        val url = state.value.endpoint.replaceFirst("https://", "wss://").replaceFirst("http://", "ws://") + "/ws"
+        ws = http.newWebSocket(Request.Builder().url(url).build(), object : WebSocketListener() {
+            override fun onOpen(webSocket: WebSocket, response: Response) { webSocket.send(JSONObject().put("type", "auth").put("code", state.value.code).put("token", bearer).toString()) }
+            override fun onMessage(webSocket: WebSocket, text: String) { scope.launch { if (gen == generation) try { receive(JSONObject(text)) } catch (e: Exception) { message("Invalid server message: ${e.message}") } } }
+            override fun onFailure(webSocket: WebSocket, t: Throwable, response: Response?) { scope.launch { if (gen == generation) lost() } }
+            override fun onClosing(webSocket: WebSocket, code: Int, reason: String) { webSocket.close(code, reason); scope.launch { if (gen == generation) { if (code in 4001..4003) { message(reason); leave(false) } else lost() } } }
+        })
+    }
+    private fun lost() {
+        update { it.copy(connected = false, clockReady = false, message = "Connection lost. Local audio continues; reconnecting…") }
+        scheduleJob?.cancel()
+        if (reconnect?.isActive == true) return
+        val delayMs = (1000L shl attempts.coerceAtMost(5)) + (0..500).random(); attempts++
+        reconnect = scope.launch { delay(delayMs); reconnect = null; connect() }
+    }
+    private fun frame(x: JSONObject) = PlaybackFrame(x.getInt("index"), x.getDouble("positionMs").toLong(), x.getBoolean("playing"), x.getDouble("executeAt"), x.getLong("revision"))
+    private fun cars(array: JSONArray): List<Car> = (0 until array.length()).map { i -> val c = array.getJSONObject(i); Car(c.getString("name"), c.getString("role"), c.getBoolean("online"), if (c.isNull("driftMs")) null else c.optDouble("driftMs").toLong(), if (c.isNull("rttMs")) null else c.optDouble("rttMs").toLong(), c.optBoolean("buffered"), c.optBoolean("missing")) }
+    private fun receive(x: JSONObject) {
+        when (x.getString("type")) {
+            "cars" -> update { it.copy(cars = cars(x.getJSONArray("cars"))) }
+            "pong" -> {
+                val t0 = x.getDouble("clientTime")
+                if (!pings.remove(t0)) return
+                val wasReady = clock.ready
+                clock.add(t0, x.getDouble("t1"), x.getDouble("t2"), localNow())
+                update { it.copy(clockReady = clock.ready, rttMs = clock.rttMs.toLong()) }
+                if (!wasReady && clock.ready) desired?.let { schedule(it, true) }
+            }
+            "state" -> {
+                attempts = 0
+                val array = x.getJSONArray("playlist")
+                val queue = (0 until array.length()).map { i -> val t = array.getJSONObject(i); RemoteTrack(t.getString("hash"), t.getString("title"), t.getString("artist"), t.optString("album"), t.getDouble("durationMs").toLong()) }
+                val cars = cars(x.getJSONArray("cars"))
+                val wasConnected = state.value.connected
+                val sharingRevoked = state.value.sharing && !x.getBoolean("sharing")
+                update { it.copy(connected = true, queue = queue, cars = cars, guestControls = x.getBoolean("guestControls"), sharing = x.getBoolean("sharing"), repeat = x.getString("repeat"), message = if (!wasConnected) "Session connected. Matching clocks…" else it.message) }
+                previous = x.optJSONObject("previous")?.let(::frame)
+                val f = frame(x.getJSONObject("frame"))
+                if (sharingRevoked && state.value.library.none { it.hash == queue.getOrNull(f.index)?.hash }) { player?.stop(); preparedHash = "" }
+                if (desired?.revision != f.revision || !wasConnected || sharingRevoked) { desired = f; if (clock.ready) schedule(f, true) }
+            }
+            "error" -> message(x.getString("error"))
+        }
+    }
+    private fun prepare(f: PlaybackFrame): Boolean {
+        val p = player ?: return false
+        val remote = state.value.queue.getOrNull(f.index) ?: run { p.pause(); p.clearMediaItems(); preparedHash = ""; return false }
+        if (preparedHash == remote.hash) return true
+        val local = state.value.library.find { it.hash == remote.hash }
+        val uri = if (local != null) local.uri else if (state.value.sharing) "${state.value.endpoint}/sessions/${state.value.code}/audio/${remote.hash}" else null
+        if (uri == null) { p.pause(); p.clearMediaItems(); preparedHash = ""; update { it.copy(missing = true, playing = false, message = "Missing MP3: ${remote.title}. Import the identical file or ask the host to share it.") }; return false }
+        val metadata = MediaMetadata.Builder().setTitle(remote.title).setArtist(remote.artist).setAlbumTitle(remote.album).apply { local?.artPath?.let { setArtworkUri(Uri.fromFile(java.io.File(it))) } }.build()
+        p.pause(); p.setMediaItem(MediaItem.Builder().setMediaId(remote.hash).setUri(uri).setMediaMetadata(metadata).build(), f.positionMs); p.prepare(); preparedHash = remote.hash
+        update { it.copy(missing = false, index = f.index) }; return true
+    }
+    private fun schedule(f: PlaybackFrame, recovery: Boolean = false) {
+        if (!clock.ready) return
+        scheduleJob?.cancel()
+        val delayMs = (f.executeAt - serverNow() - state.value.latencyMs).toLong()
+        // Stage a new track paused to allow decoding/buffering before its deadline.
+        // Same-track play/pause/seek keeps playing until the scheduled deadline.
+        if (delayMs > 0) {
+            prepare(f)
+            scheduleJob = scope.launch { delay(delayMs); if (desired?.revision == f.revision) apply(f) }
+        } else { apply(f) }
+    }
+    private fun apply(f: PlaybackFrame) {
+        val p = player ?: return
+        if (!prepare(f)) return
+        val target = f.target(serverNow(), state.value.latencyMs).coerceAtMost(state.value.queue.getOrNull(f.index)?.durationMs ?: Long.MAX_VALUE)
+        if (activeRevision != f.revision || abs(p.currentPosition - target) > 250) { p.seekTo(target); activeRevision = f.revision; p.playbackParameters = PlaybackParameters(1f) }
+        p.playWhenReady = f.playing
+        update { it.copy(index = f.index, message = if (clock.rttMs > 500) "High network delay: synchronization may be less accurate." else "Following synchronized playback") }
+    }
+    private fun tick() {
+        val p = player ?: return
+        if (state.value.connected && SystemClock.elapsedRealtime() - lastStatus > 2000) {
+            lastStatus = SystemClock.elapsedRealtime()
+            val t0 = localNow(); pings.add(t0); if (pings.size > 30) pings.clear()
+            ws?.send(JSONObject().put("type", "ping").put("clientTime", t0).toString())
+            ws?.send(JSONObject().put("type", "status").put("driftMs", state.value.driftMs ?: JSONObject.NULL).put("rttMs", clock.rttMs).put("buffered", p.playbackState == Player.STATE_READY).put("missing", state.value.missing).put("clockReady", clock.ready).toString())
+        }
+        val f = desired
+        var error: Long? = null
+        if (f != null && clock.ready && state.value.connected && serverNow() >= f.executeAt && preparedHash == state.value.queue.getOrNull(f.index)?.hash && p.playbackState == Player.STATE_READY) {
+            if (activeRevision != f.revision) apply(f)
+            val target = f.target(serverNow(), state.value.latencyMs).coerceAtMost(state.value.queue.getOrNull(f.index)?.durationMs ?: Long.MAX_VALUE)
+            error = target - p.currentPosition
+            if (f.playing && p.isPlaying) {
+                if (abs(error) > 300 && SystemClock.elapsedRealtime() - lastHardSeek > 1500) { p.seekTo(target); lastHardSeek = SystemClock.elapsedRealtime(); p.playbackParameters = PlaybackParameters(1f) }
+                else p.playbackParameters = PlaybackParameters(if (abs(error) > 35) driftSpeed(error) else 1f)
+            }
+        }
+        update { it.copy(positionMs = p.currentPosition, playing = p.isPlaying, buffering = p.playbackState == Player.STATE_BUFFERING, driftMs = error) }
+    }
+    fun command(kind: String, positionMs: Long? = null, index: Int? = null, revision: Long? = null) {
+        val s = state.value
+        if (s.role == "local") {
+            val p = player ?: return
+            when (kind) {
+                "play" -> p.play()
+                "pause" -> p.pause()
+                "seek" -> p.seekTo(positionMs ?: 0)
+                "next", "previous", "select" -> {
+                    if (s.queue.isEmpty()) return
+                    val i = index ?: ((s.index + if (kind == "next") 1 else -1) + s.queue.size) % s.queue.size
+                    if (prepare(PlaybackFrame(i, 0, false, 0.0, 0))) { p.seekTo(0); p.play(); update { it.copy(index = i) } }
+                }
+            }; return
+        }
+        if (!s.connected) { message("Reconnect before changing synchronized playback."); return }
+        if (!s.canControl) { message("The host controls playback."); return }
+        val action = JSONObject().put("kind", kind)
+        positionMs?.let { action.put("positionMs", it) }; index?.let { action.put("index", it) }; revision?.let { action.put("revision", it) }
+        send(JSONObject().put("type", "control").put("action", action))
+    }
+    private fun send(x: JSONObject) { x.put("id", UUID.randomUUID().toString()); if (ws?.send(x.toString()) != true) message("Connection unavailable. Retry when reconnected.") }
+    fun publish(hashes: List<String>) {
+        if (state.value.driving) { message("Park before changing the playlist."); return }
+        if (!state.value.connected || state.value.role != "host") { message("Create a host session first."); return }
+        val list = hashes.mapNotNull { h -> state.value.library.find { it.hash == h } }
+        val array = JSONArray(); list.forEach { t -> array.put(JSONObject().put("hash", t.hash).put("title", t.title).put("artist", t.artist).put("album", t.album).put("durationMs", t.durationMs)) }
+        send(JSONObject().put("type", "playlist").put("playlist", array)); message("Publishing playlist…")
+    }
+    fun listenLocal(hashes: List<String>) {
+        if (state.value.driving || state.value.code.isNotBlank()) { message("Leave the session before listening locally."); return }
+        val queue = hashes.mapNotNull { h -> state.value.library.find { it.hash == h } }.map { RemoteTrack(it.hash, it.title, it.artist, it.album, it.durationMs) }
+        desired = null; preparedHash = ""; update { it.copy(role = "local", queue = queue, index = 0, message = "Local playback — no synchronization session") }
+        if (queue.isNotEmpty() && prepare(PlaybackFrame(0, 0, false, 0.0, 0))) player?.play()
+    }
+    fun settings(guestControls: Boolean = state.value.guestControls, sharing: Boolean = state.value.sharing, repeat: String = state.value.repeat) {
+        if (state.value.driving || !state.value.connected || state.value.role != "host") return
+        send(JSONObject().put("type", "settings").put("guestControls", guestControls).put("sharing", sharing).put("repeat", repeat))
+    }
+    fun volume(v: Float) { player?.volume = v; update { it.copy(volume = v) } }
+    fun driving(v: Boolean) { prefs.edit().putBoolean("driving", v).apply(); update { it.copy(driving = v) } }
+    fun latency(ms: Long) { prefs.edit().putLong("latency", ms.coerceIn(0, 2000)).apply(); update { it.copy(latencyMs = ms.coerceIn(0, 2000)) } }
+    fun importFiles(uris: List<Uri>) {
+        if (state.value.driving) return
+        scope.launch {
+            update { it.copy(busy = true) }; var count = 0
+            withContext(Dispatchers.IO) { for (uri in uris) try {
+                context.contentResolver.takePersistableUriPermission(uri, android.content.Intent.FLAG_GRANT_READ_URI_PERMISSION)
+                dao.insert(importTrack(context, uri)); count++
+            } catch (e: Exception) { withContext(Dispatchers.Main) { message("Import failed: ${e.message}") } } }
+            update { it.copy(busy = false, message = "Imported $count of ${uris.size} MP3 files.") }
+        }
+    }
+    fun savePlaylist(name: String, hashes: List<String>, id: Long = 0) { if (!state.value.driving && name.isNotBlank()) scope.launch { dao.save(SavedPlaylist(id, name.trim(), hashes.joinToString(","))); message("Playlist saved.") } }
+    fun deletePlaylist(p: SavedPlaylist) { if (!state.value.driving) scope.launch { dao.delete(p) } }
+    fun uploadMissingAudio() {
+        val s = state.value
+        if (s.driving || !s.sharing || s.role != "host" || !s.connected) return
+        scope.launch {
+            update { it.copy(busy = true) }
+            try {
+                withContext(Dispatchers.IO) {
+                    for (remote in s.queue.distinctBy { it.hash }) {
+                        val t = s.library.find { it.hash == remote.hash } ?: continue
+                        val uri = Uri.parse(t.uri)
+                        val size = context.contentResolver.openAssetFileDescriptor(uri, "r")?.use { it.length } ?: -1
+                        require(size in 1..104857600) { "Track size unknown or above 100 MB. Copy it to internal storage and import again." }
+                        val body = object : RequestBody() {
+                            override fun contentType() = "audio/mpeg".toMediaType()
+                            override fun contentLength() = size
+                            override fun writeTo(sink: okio.BufferedSink) { context.contentResolver.openInputStream(uri)?.use { input -> val buf = ByteArray(65536); while (true) { val n = input.read(buf); if (n < 0) break; sink.write(buf, 0, n) } } ?: throw IOException("Storage unavailable") }
+                        }
+                        val req = Request.Builder().url("${s.endpoint}/sessions/${s.code}/audio/${t.hash}").header("Authorization", "Bearer $bearer").put(body).build()
+                        http.newCall(req).execute().use { response -> if (!response.isSuccessful) error(JSONObject(response.body?.string() ?: "{}").optString("error", "Upload failed")) }
+                        withContext(Dispatchers.Main) { message("Uploaded ${t.title}") }
+                    }
+                }
+                message("Audio relay ready. Guest can tap Retry audio if needed.")
+            } catch (e: Exception) { message(e.message ?: "Upload failed") }
+            finally { update { it.copy(busy = false) } }
+        }
+    }
+    fun retryAudio() { preparedHash = ""; desired?.let { schedule(it, true) } }
+    fun exportMetrics(uri: Uri) {
+        scope.launch {
+            try {
+                withContext(Dispatchers.IO) {
+                    val req = Request.Builder().url("${state.value.endpoint}/sessions/${state.value.code}/metrics").header("Authorization", "Bearer $bearer").build()
+                    http.newCall(req).execute().use { response ->
+                        require(response.isSuccessful) { "Host-only export; reconnect to the server first" }
+                        context.contentResolver.openOutputStream(uri)?.use { out -> response.body?.byteStream()?.use { it.copyTo(out) } } ?: error("Cannot write export")
+                    }
+                }; message("Telemetry CSV exported.")
+            } catch (e: Exception) { message(e.message ?: "Export failed") }
+        }
+    }
+    fun audioToken() = bearer
+    fun resume() { if (bearer.isNotBlank() && !state.value.connected) connect() }
+    fun leave(clearMessage: Boolean = true) {
+        generation++; reconnect?.cancel(); ws?.close(1000, "Left session"); ws = null; scheduleJob?.cancel(); player?.pause(); player?.clearMediaItems(); preparedHash = ""; desired = null; activeRevision = -1; bearer = ""
+        prefs.edit().remove("token").remove("code").remove("role").apply()
+        update { it.copy(code = "", role = "", connected = false, queue = emptyList(), cars = emptyList(), clockReady = false, driftMs = null, message = if (clearMessage) "Session left. Host can create a new session for two new cars." else it.message) }
+    }
+    fun endSession() { scope.launch { try { withContext(Dispatchers.IO) { request("/sessions/${state.value.code}", "DELETE") }; leave() } catch (e: Exception) { message(e.message ?: "Could not end session") } } }
+}

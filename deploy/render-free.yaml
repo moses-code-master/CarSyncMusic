@@ -1,0 +1,14 @@
+# Trial only: no persistent disk. Sessions and audio can be lost on restart/deploy.
+# Select this file as the Blueprint path if you explicitly choose the free trial.
+services:
+  - type: web
+    name: carsync-music-trial
+    runtime: docker
+    plan: free
+    rootDir: backend
+    dockerfilePath: ./Dockerfile
+    healthCheckPath: /health
+    numInstances: 1
+    envVars:
+      - key: DATA_DIR
+        value: /app/data
