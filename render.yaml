@@ -2,9 +2,10 @@
 # Schema: https://render.com/docs/blueprint-spec
 services:
   - type: web
-    name: carsync-music-server
+    name: carsync-music
     runtime: docker
     plan: free
+    region: frankfurt
     rootDir: backend
     dockerfilePath: ./Dockerfile
     healthCheckPath: /health

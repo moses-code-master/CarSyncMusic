@@ -2,9 +2,10 @@
 # Select this file as the Blueprint path if you explicitly choose the free trial.
 services:
   - type: web
-    name: carsync-music-trial
+    name: carsync-music
     runtime: docker
     plan: free
+    region: frankfurt
     rootDir: backend
     dockerfilePath: ./Dockerfile
     healthCheckPath: /health

@@ -1,0 +1,10 @@
+2026-10-14T14:13:28.140Z
+HTTPS health check passed
+Host creation and guest joining passed
+Authenticated secure WebSocket connections passed
+Clock timestamp exchange passed
+Identical scheduled playback frame delivered to both clients
+Real MP3 upload, authenticated byte-range streaming and unauthorized-access rejection passed
+Guest reconnect restored authoritative playback frame
+Authenticated telemetry export passed
+Control-plane and transfer checks only; no physical speaker timing measured.

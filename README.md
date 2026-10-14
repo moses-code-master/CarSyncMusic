@@ -2,6 +2,15 @@
 
 Native Kotlin/Compose Android music app plus a self-hosted Node.js/WebSocket relay. The app plays ordinary MP3 files through each head unit's speakers, without Google Play Services or paid music subscriptions. Requires Android 8.0 or newer, third-party APK support, and network access.
 
+## Your live cloud setup
+
+- Public source: [moses-code-master/CarSyncMusic](https://github.com/moses-code-master/CarSyncMusic)
+- APK: [v1.0.0 test release](https://github.com/moses-code-master/CarSyncMusic/releases/tag/v1.0.0)
+- Server address to enter in Settings on BOTH cars: `https://carsync-music.onrender.com`
+- [Server health check](https://carsync-music.onrender.com/health)
+
+The cloud backend is deployed on Render's Free plan in Frankfurt, without a paid disk. Your laptop can be off. Both cars need network access to this server. Free hosting can sleep and lose sessions/uploads on restart or redeployment; recreate a session if that happens. Import identical local MP3s for lowest data use. This URL is a backend API, so its root path is not a website page; `/health` reports availability. The APK remains a development/test build, and physical head-unit audio timing still needs validation.
+
 ## Start here
 
 1. Install Node.js 24 LTS on a laptop or server.
@@ -36,7 +45,7 @@ Pinned project stack: AGP 8.9.2, Gradle 8.11.1, Kotlin 2.1.20, Compose BOM 2025.
 
 ## Internet deployment
 
-The source is available in the private GitHub repository [moses-code-master/CarSyncMusic](https://github.com/moses-code-master/CarSyncMusic), with a GitHub APK-build workflow and Render cloud deployment files. Follow `docs/GITHUB-CLOUD.md` to run without your laptop. The root `render.yaml` selects the free trial requested by the user, with temporary storage and no paid disk. The cloud music server is not deployed yet.
+The source is available in the public GitHub repository [moses-code-master/CarSyncMusic](https://github.com/moses-code-master/CarSyncMusic), with a GitHub APK-build workflow and Render cloud deployment files. The cloud music server is deployed at `https://carsync-music.onrender.com`. Follow `docs/GITHUB-CLOUD.md` for details. The root `render.yaml` selects the free trial requested by the user, with temporary storage and no paid disk.
 
 Use a Linux machine with Docker and Docker Compose; a VPS may cost money even though the software is free. Point your domain's A/AAAA records at that machine, open inbound 80/443, and set `DOMAIN=music.yourdomain.example` in a project-root `.env`. Run `docker compose up -d --build`. Caddy obtains HTTPS certificates and proxies HTTP and WebSocket traffic to the private server container. No public 8080 port is needed. Check `https://your-domain/health` before entering the URL in both apps. The supplied example domain is a placeholder.
 
