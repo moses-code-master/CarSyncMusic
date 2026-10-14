@@ -29,7 +29,7 @@ jobs:
   android:
     runs-on: ubuntu-latest
     env:
-      CARSYNC_KEYSTORE: ${{ runner.temp }}/carsync-test.jks
+      CARSYNC_KEYSTORE: /tmp/carsync-test.jks
     steps:
       - uses: actions/checkout@v7
       - uses: actions/setup-java@v6
@@ -64,7 +64,7 @@ jobs:
     runs-on: ubuntu-latest
     timeout-minutes: 30
     env:
-      CARSYNC_KEYSTORE: ${{ runner.temp }}/carsync-test.jks
+      CARSYNC_KEYSTORE: /tmp/carsync-test.jks
     strategy:
       fail-fast: false
       matrix:
