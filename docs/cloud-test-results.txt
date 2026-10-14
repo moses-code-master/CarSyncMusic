@@ -1,9 +1,10 @@
-2026-10-14T23:23:55.036Z
+2026-10-14T23:33:20.117Z
 HTTPS health check passed
 Host creation and guest joining passed
 Authenticated secure WebSocket connections passed
 Clock timestamp exchange passed
 Identical scheduled playback frame delivered to both clients
+Rapid pause/seek/play preserved the requested position on the live server
 Real MP3 upload, authenticated byte-range streaming and unauthorized-access rejection passed
 Guest reconnect restored authoritative playback frame
 Authenticated telemetry export passed
