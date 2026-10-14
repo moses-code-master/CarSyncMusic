@@ -8,6 +8,13 @@ import { createServer } from '../src/server.mjs';
 import { digest, schedule, position, effective } from '../src/model.mjs';
 
 const track = (hash = 'a'.repeat(64)) => ({ hash, title: 'Test track', artist: 'Test artist', album: 'Tests', durationMs: 60000 });
+test('rapid select/play and seek/play retain the pending track and requested position', () => {
+  const s = { playlist: [track(), track('b'.repeat(64))], repeat: 'off', previous: null, frame: { index: 0, positionMs: 0, playing: false, executeAt: 100, revision: 0 } };
+  schedule(s, { kind: 'select', index: 1 }, 1000); schedule(s, { kind: 'play' }, 1010);
+  assert.equal(s.frame.index, 1); assert.equal(s.frame.playing, true); assert.equal(s.previous.index, 0);
+  schedule(s, { kind: 'seek', positionMs: 15000 }, 1020); schedule(s, { kind: 'play' }, 1030);
+  assert.equal(s.frame.index, 1); assert.ok(s.frame.positionMs >= 15000 && s.frame.positionMs < 15100);
+});
 class Peer {
   constructor(url, credentials) {
     this.messages = []; this.ws = new WebSocket(url);

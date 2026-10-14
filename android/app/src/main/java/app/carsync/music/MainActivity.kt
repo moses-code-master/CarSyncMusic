@@ -2,6 +2,7 @@ package app.carsync.music
 
 import android.Manifest
 import android.content.Intent
+import android.content.ComponentName
 import android.graphics.Bitmap
 import android.graphics.BitmapFactory
 import android.net.Uri
@@ -13,6 +14,8 @@ import androidx.activity.result.contract.ActivityResultContracts
 import androidx.activity.compose.rememberLauncherForActivityResult
 import androidx.compose.foundation.*
 import androidx.compose.foundation.layout.*
+import androidx.compose.foundation.lazy.LazyColumn
+import androidx.compose.foundation.lazy.items
 import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.material3.*
 import androidx.compose.material.icons.Icons
@@ -28,27 +31,39 @@ import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
 import androidx.compose.ui.res.painterResource
 import androidx.lifecycle.compose.collectAsStateWithLifecycle
+import androidx.media3.session.MediaController
+import androidx.media3.session.SessionToken
+import androidx.core.content.ContextCompat
+import com.google.common.util.concurrent.ListenableFuture
+import androidx.compose.ui.graphics.Brush
 import com.google.zxing.*
 import com.google.zxing.common.HybridBinarizer
 import com.google.zxing.qrcode.QRCodeWriter
 import java.io.File
 
 class MainActivity : ComponentActivity() {
+    private var controller: ListenableFuture<MediaController>? = null
     private val sync get() = (application as CarSyncApp).sync
     override fun onCreate(savedInstanceState: Bundle?) {
         super.onCreate(savedInstanceState)
-        startService(Intent(this, PlaybackService::class.java))
         if (Build.VERSION.SDK_INT >= 33) registerForActivityResult(ActivityResultContracts.RequestPermission()) {}.launch(Manifest.permission.POST_NOTIFICATIONS)
         acceptLink(intent)
         setContent { CarSyncScreen(sync) }
     }
+    override fun onStart() {
+        super.onStart()
+        val future = MediaController.Builder(this, SessionToken(this, ComponentName(this, PlaybackService::class.java))).buildAsync()
+        controller = future
+        future.addListener({ try { future.get() } catch (e: Exception) { sync.message("Audio service could not start: ${e.cause?.message ?: e.message}") } }, ContextCompat.getMainExecutor(this))
+    }
+    override fun onStop() { controller?.let { MediaController.releaseFuture(it) }; controller = null; super.onStop() }
     override fun onNewIntent(intent: Intent) { super.onNewIntent(intent); acceptLink(intent) }
     private fun acceptLink(intent: Intent) { intent.data?.let { sync.invitation(it) } }
 }
 
-private val Accent = Color(0xFF56E2BA)
-private val Panel = Color(0xFF151D29)
-private val Muted = Color(0xFF9CAABD)
+private val Accent = Color(0xFFB4F36D)
+private val Panel = Color(0xFF19212B)
+private val Muted = Color(0xFF96A6B8)
 private val pages = listOf("Home", "Music Library", "Playlists", "Create Session", "Join Session", "Now Playing", "Connected Cars", "Settings")
 
 @OptIn(ExperimentalMaterial3Api::class)
@@ -66,6 +81,11 @@ private val pages = listOf("Home", "Music Library", "Playlists", "Create Session
     LaunchedEffect(s.invitationCode) { if (s.invitationCode.isNotBlank()) page = "Join Session" }
     val context = androidx.compose.ui.platform.LocalContext.current
     val import = rememberLauncherForActivityResult(ActivityResultContracts.OpenMultipleDocuments()) { sync.importFiles(it) }
+    val scanPermission = rememberLauncherForActivityResult(ActivityResultContracts.RequestPermission()) { granted -> if (granted) sync.scanPhone() else sync.message("Allow Music and audio access to scan your phone. Import files works without this permission.") }
+    val scan = {
+        val permission = if (Build.VERSION.SDK_INT >= 33) Manifest.permission.READ_MEDIA_AUDIO else Manifest.permission.READ_EXTERNAL_STORAGE
+        if (ContextCompat.checkSelfPermission(context, permission) == android.content.pm.PackageManager.PERMISSION_GRANTED) sync.scanPhone() else scanPermission.launch(permission)
+    }
     val metricsExport = rememberLauncherForActivityResult(ActivityResultContracts.CreateDocument("text/csv")) { uri -> if (uri != null) sync.exportMetrics(uri) }
     val qrImport = rememberLauncherForActivityResult(ActivityResultContracts.OpenDocument()) { uri ->
         if (uri != null) try {
@@ -77,7 +97,7 @@ private val pages = listOf("Home", "Music Library", "Playlists", "Create Session
             sync.message("Review the QR server address, save it in Settings, then join.")
         } catch (e: Exception) { sync.message(e.message ?: "Unable to read QR") }
     }
-    val colors = darkColorScheme(primary = Accent, onPrimary = Color(0xFF07251C), background = Color(0xFF0C1017), surface = Panel, onSurface = Color(0xFFE9F0FA), secondary = Color(0xFF85B5FF))
+    val colors = darkColorScheme(primary = Accent, onPrimary = Color(0xFF162609), background = Color(0xFF0B1016), surface = Panel, onSurface = Color(0xFFF2F5FA), secondary = Color(0xFF92BFFF))
     MaterialTheme(colorScheme = colors) {
         Scaffold(topBar = {
             Column(Modifier.background(Color(0xFF0C1017)).padding(horizontal = 20.dp, vertical = 10.dp)) {
@@ -86,47 +106,52 @@ private val pages = listOf("Home", "Music Library", "Playlists", "Create Session
                     Text("CarSync", fontWeight = FontWeight.Bold, fontSize = 26.sp); Text("  MUSIC", color = Muted, fontSize = 13.sp)
                     Spacer(Modifier.weight(1f)); Text(if (s.connected) "● ${s.role.uppercase()} · ${s.code}" else if (s.role == "local") "LOCAL AUDIO" else "● OFFLINE", color = if (s.connected) Accent else Muted)
                 }
-                Row(Modifier.horizontalScroll(rememberScrollState()).padding(top = 12.dp), horizontalArrangement = Arrangement.spacedBy(6.dp)) {
-                    val visible = if (s.driving) listOf("Now Playing", "Connected Cars", "Settings") else pages
-                    visible.forEach { name -> FilterChip(selected = page == name, onClick = { page = name }, label = { Text(name, fontSize = 16.sp) }, modifier = Modifier.heightIn(min = 52.dp)) }
-                }
+                Text(page, color = Muted, fontSize = 15.sp, modifier = Modifier.padding(top = 6.dp))
             }
         }, bottomBar = {
-            Column(Modifier.fillMaxWidth().background(Panel).padding(12.dp)) {
+            Column(Modifier.fillMaxWidth().background(Panel)) {
                 if (s.busy) LinearProgressIndicator(Modifier.fillMaxWidth())
-                Text(s.message, color = Muted, fontSize = 15.sp, maxLines = 2, overflow = TextOverflow.Ellipsis)
+                Text(s.message, color = if (s.audioError.isNotBlank()) Color(0xFFFFB19F) else Muted, fontSize = 13.sp, maxLines = 3, modifier = Modifier.padding(horizontal = 16.dp, vertical = 8.dp))
+                NavigationBar(containerColor = Color(0xFF10171F)) {
+                    val nav = listOf("Home" to Icons.Default.Home, "Music Library" to Icons.Default.List, "Now Playing" to Icons.Default.PlayArrow, "Create Session" to Icons.Default.Share, "Settings" to Icons.Default.Settings)
+                    nav.forEachIndexed { i, (target, icon) -> NavigationBarItem(selected = page == target || (i == 3 && page in listOf("Join Session", "Connected Cars")) || (i == 1 && page == "Playlists"), onClick = { page = target }, icon = { Icon(icon, target) }, label = { Text(listOf("Home", "Library", "Player", "Session", "Settings")[i], fontSize = 12.sp) }) }
+                }
             }
         }) { insets ->
             Column(Modifier.fillMaxSize().padding(insets).verticalScroll(rememberScrollState()).padding(20.dp), verticalArrangement = Arrangement.spacedBy(16.dp)) {
                 if (s.driving && page !in listOf("Now Playing", "Connected Cars", "Settings")) { Text("Driving mode: only playback and connection status are available."); LargeButton("Now Playing") { page = "Now Playing" } }
                 else when (page) {
                     "Home" -> {
-                        Text("One playlist. Two cars.", fontSize = 34.sp, fontWeight = FontWeight.Bold)
-                        Text("Bring your MP3s. Share the journey.", color = Muted, fontSize = 20.sp)
+                        Card(colors = CardDefaults.cardColors(containerColor = Color(0xFF243B28)), shape = RoundedCornerShape(28.dp)) { Column(Modifier.padding(24.dp), verticalArrangement = Arrangement.spacedBy(12.dp)) {
+                            Text("YOUR ROAD. YOUR SOUND.", color = Accent, fontSize = 12.sp, fontWeight = FontWeight.Bold)
+                            Text("Good music.\nShared miles.", fontSize = 38.sp, fontWeight = FontWeight.Bold)
+                            Text("Play your phone’s MP3s instantly. Connect another car when you’re ready.", color = Color(0xFFCEDACD), fontSize = 18.sp)
+                            LargeButton("Find music on this phone", !s.busy) { scan(); page = "Music Library" }
+                        } }
                         Row(Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.spacedBy(12.dp)) {
                             Stat("LIBRARY", "${s.library.size} tracks", Modifier.weight(1f)); Stat("SESSION", if (s.code.isBlank()) "Ready to connect" else s.code, Modifier.weight(1f))
                         }
                         LargeButton("Create a listening session", enabled = !s.busy) { page = "Create Session" }
                         LargeButton("Join the other car") { page = "Join Session" }
                         LargeButton("Open music library") { page = "Music Library" }
+                        if (s.library.isNotEmpty() && s.track == null) s.library.take(4).forEach { track -> TrackRow(track, false, { sync.playTrack(track.hash); page = "Now Playing" }, {}) }
                         if (s.track != null) NowPlaying(s, sync)
                     }
                     "Music Library" -> {
-                        Title("Your music", "Files stay on this device. Identical SHA-256 hashes match the other car.")
-                        LargeButton("Import MP3s · internal / SD / USB", enabled = !s.busy) { import.launch(arrayOf("audio/mpeg", "audio/mp3")) }
+                        Title("Your music", "Tap any song to play. Scan your phone or import from a folder, USB or SD card.")
+                        Row(Modifier.horizontalScroll(rememberScrollState()), horizontalArrangement = Arrangement.spacedBy(10.dp)) {
+                            LargeButton("Scan phone", !s.busy) { scan() }
+                            LargeButton("Import files", !s.busy) { import.launch(arrayOf("audio/*")) }
+                            LargeButton("Playlists") { page = "Playlists" }
+                        }
                         OutlinedTextField(search, { search = it }, label = { Text("Search title, artist or album") }, modifier = Modifier.fillMaxWidth())
                         Row(horizontalArrangement = Arrangement.spacedBy(10.dp)) {
                             LargeButton("Select all") { selected = s.library.map { it.hash } }
                             LargeButton("Clear") { selected = emptyList() }
                         }
-                        s.library.filter { "${it.title} ${it.artist} ${it.album}".contains(search, true) }.forEach { t ->
-                            Card(Modifier.fillMaxWidth().clickable { selected = if (t.hash in selected) selected - t.hash else selected + t.hash }) {
-                                Row(Modifier.padding(12.dp), verticalAlignment = Alignment.CenterVertically) {
-                                    Checkbox(t.hash in selected, { checked -> selected = if (checked) selected + t.hash else selected - t.hash }); Artwork(t.artPath, Modifier.size(58.dp))
-                                    Column(Modifier.weight(1f).padding(start = 12.dp)) { Text(t.title, fontSize = 20.sp); Text("${t.artist} · ${t.album} · ${time(t.durationMs)}", color = Muted) }
-                                }
-                            }
-                        }
+                        LazyColumn(Modifier.fillMaxWidth().height(360.dp), verticalArrangement = Arrangement.spacedBy(10.dp)) { items(s.library.filter { "${it.title} ${it.artist} ${it.album}".contains(search, true) }, key = { it.hash }) { t ->
+                            TrackRow(t, t.hash in selected, { sync.playTrack(t.hash); page = "Now Playing" }, { selected = if (t.hash in selected) selected - t.hash else selected + t.hash })
+                        } }
                         Text("${selected.size} selected · selection order becomes playlist order", color = Accent)
                         OutlinedTextField(playlistName, { playlistName = it }, label = { Text("Playlist name") }, modifier = Modifier.fillMaxWidth())
                         LargeButton("Save playlist", selected.isNotEmpty()) { sync.savePlaylist(playlistName, selected, editId); editId = 0; page = "Playlists" }
@@ -168,6 +193,8 @@ private val pages = listOf("Home", "Music Library", "Playlists", "Create Session
                         Title("Lead the soundtrack", "Both cars must use the same server. A session expires after 24 hours.")
                         Text("Server: ${s.endpoint.ifBlank { "Configure in Settings" }}", color = Muted)
                         LargeButton("Create session", s.code.isBlank() && !s.busy) { sync.create() }
+                        LargeButton("Join another car") { page = "Join Session" }
+                        LargeButton("Connected cars") { page = "Connected Cars" }
                         if (s.role == "host") {
                             Text(s.code, fontSize = 56.sp, fontWeight = FontWeight.Bold, color = Accent)
                             val link = "carsync://join?code=${s.code}&server=${Uri.encode(s.endpoint)}"
@@ -261,22 +288,33 @@ private val pages = listOf("Home", "Music Library", "Playlists", "Create Session
     Text("${time(s.positionMs)} / ${time(t.durationMs)}", color = Muted)
     Row(verticalAlignment = Alignment.CenterVertically, horizontalArrangement = Arrangement.spacedBy(20.dp), modifier = Modifier.padding(vertical = 12.dp)) {
         IconButton({ sync.command("previous") }, Modifier.size(64.dp), enabled = s.canControl) { Icon(painterResource(R.drawable.ic_previous), "Previous track", Modifier.size(40.dp)) }
-        FilledIconButton({ sync.command(if (s.playing) "pause" else "play") }, Modifier.size(84.dp), enabled = s.canControl && !s.missing) { Icon(painterResource(if (s.playing) R.drawable.ic_pause else R.drawable.ic_play), "Play or pause", Modifier.size(48.dp)) }
+        FilledIconButton({ sync.command(if (s.requestedPlaying) "pause" else "play") }, Modifier.size(96.dp), enabled = s.canControl && !s.missing && s.serviceReady) { Icon(painterResource(if (s.requestedPlaying) R.drawable.ic_pause else R.drawable.ic_play), "Play or pause", Modifier.size(48.dp)) }
         IconButton({ sync.command("next") }, Modifier.size(64.dp), enabled = s.canControl) { Icon(painterResource(R.drawable.ic_next), "Next track", Modifier.size(40.dp)) }
     }
     Text("Local volume", color = Muted)
     Slider(s.volume, { sync.volume(it) }, modifier = Modifier.height(56.dp))
-    Text(if (s.clockReady) "Estimated player drift: ${s.driftMs?.let { "$it ms" } ?: "Measuring"} · RTT ${s.rttMs} ms" else "Clock synchronization pending", color = Muted)
+    if (s.audioError.isNotBlank()) Text(s.audioError, color = Color(0xFFFFB19F))
+    Text(if (s.role == "local") "On this device · no internet needed" else if (s.clockReady) "Player drift: ${s.driftMs?.let { "$it ms" } ?: "Measuring"} · RTT ${s.rttMs} ms" else "Matching clocks… playback will start when ready", color = Muted)
 }
-@Composable private fun Artwork(path: String?, modifier: Modifier) {
+@Composable private fun Artwork(path: String?, modifier: Modifier, thumbnail: Boolean = false) {
     val bitmap = remember(path) { path?.let {
         val bounds = BitmapFactory.Options().apply { inJustDecodeBounds = true }; BitmapFactory.decodeFile(it, bounds)
-        val options = BitmapFactory.Options().apply { inSampleSize = (maxOf(bounds.outWidth, bounds.outHeight) / 512).coerceAtLeast(1) }
+        val options = BitmapFactory.Options().apply { inSampleSize = (maxOf(bounds.outWidth, bounds.outHeight) / if (thumbnail) 96 else 512).coerceAtLeast(1) }
         BitmapFactory.decodeFile(it, options)
     } }
-    Box(modifier.background(Panel, RoundedCornerShape(20.dp)), contentAlignment = Alignment.Center) {
+    Box(modifier.background(Brush.linearGradient(listOf(Color(0xFF425C42), Color(0xFF14222D), Color(0xFF263542))), RoundedCornerShape(28.dp)), contentAlignment = Alignment.Center) {
         if (bitmap != null) Image(bitmap.asImageBitmap(), "Album cover", Modifier.fillMaxSize())
         else Icon(painterResource(R.drawable.ic_wave), "Album artwork placeholder", Modifier.size(100.dp), tint = Accent)
+    }
+}
+@Composable private fun TrackRow(track: Track, selected: Boolean, play: () -> Unit, select: () -> Unit) {
+    Card(Modifier.fillMaxWidth().clickable(onClick = play), shape = RoundedCornerShape(18.dp), colors = CardDefaults.cardColors(containerColor = Panel)) {
+        Row(Modifier.padding(12.dp), verticalAlignment = Alignment.CenterVertically) {
+            Artwork(track.artPath, Modifier.size(58.dp), true)
+            Column(Modifier.weight(1f).padding(horizontal = 12.dp)) { Text(track.title, maxLines = 1, overflow = TextOverflow.Ellipsis, fontSize = 18.sp, fontWeight = FontWeight.SemiBold); Text(track.artist, maxLines = 1, color = Muted, fontSize = 14.sp); Text(time(track.durationMs), color = Muted, fontSize = 12.sp) }
+            Checkbox(selected, { select() })
+            IconButton(play, Modifier.size(48.dp)) { Icon(Icons.Default.PlayArrow, "Play ${track.title}", tint = Accent) }
+        }
     }
 }
 @Composable private fun Title(title: String, subtitle: String) { Text(title, fontSize = 30.sp, fontWeight = FontWeight.Bold); Text(subtitle, color = Muted, fontSize = 18.sp) }

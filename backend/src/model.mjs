@@ -9,7 +9,8 @@ export function position(frame, at) {
 export function effective(s, at) { return s.previous && at < s.frame.executeAt ? s.previous : s.frame; }
 export function schedule(s, action, at = now()) {
   const executeAt = at + 1800;
-  const old = effective(s, at);
+  const active = effective(s, at);
+  const old = s.frame.executeAt > at ? s.frame : active;
   let frame = { ...old, positionMs: position(old, executeAt), executeAt, revision: s.frame.revision + 1 };
   if (action.kind === 'play') frame.playing = true;
   else if (action.kind === 'pause') frame.playing = false;
@@ -21,6 +22,7 @@ export function schedule(s, action, at = now()) {
     if (!Number.isInteger(frame.index) || frame.index < 0 || frame.index >= s.playlist.length) throw Error('Invalid track');
     frame.positionMs = 0;
   } else if (action.kind === 'ended') {
+    if (s.frame.executeAt > at) return false;
     if (action.revision !== old.revision || action.index !== old.index || !old.playing) return false;
     const duration = s.playlist[old.index]?.durationMs || 0;
     if (position(old, at) < duration - 1000) return false;
@@ -31,7 +33,7 @@ export function schedule(s, action, at = now()) {
     else { frame.playing = false; frame.positionMs = duration; }
   } else throw Error('Unknown command');
   if (!s.playlist.length) throw Error('Import and publish a playlist first');
-  s.previous = old; s.frame = frame;
+  s.previous = active; s.frame = frame;
   return true;
 }
 export function validatePlaylist(list) {
