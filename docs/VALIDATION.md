@@ -1,24 +1,19 @@
-# Verification performed — 14 October 2026
+# Verification performed — 15 October 2026
 
-## Android
+## Android 1.1.0
 
-- `assembleDebug testDebugUnitTest`: BUILD SUCCESSFUL.
-- 3 JVM tests passed, 0 failures/errors: clock-offset/outlier estimation, timeline projection and bounded drift correction, private-network URL validation.
-- Installable debug APK produced: `app.carsync.music`, version 1.0.0, minimum Android API 26 (Android 8), target/compile API 35.
-- APK Signature Scheme v2 verification passed. Development signing key; use your own release key for distribution.
-- Packaged architectures: arm64-v8a, armeabi-v7a, x86, x86_64. APK approximately 14 MB.
-- No Android device/emulator runtime testing was performed. Runtime import, speaker playback, foreground-service behavior, OEM compatibility and responsive UI have not been exercised on a device.
+[Verified GitHub run](https://github.com/moses-code-master/CarSyncMusic/actions/runs/38651374239) passed Android build, three JVM tests, eight backend tests, and native instrumentation jobs on API 26 (Android 8) and API 35 (Android 15).
 
-## Backend
+API 35: six runtime tests passed, zero failures/errors. API 26: five passed, one MediaStore fixture test skipped because it requires API 29. Native tests decode original MP3 audio through ExoPlayer and assert position advancement, pause, seek, resume, next/previous, end-of-track advance, playlist rename/reorder, background service playback, host/guest shared controls, reconnect, and permitted HTTP relay playback. The API 35 test inserts an MP3 into the phone's MediaStore, scans it, and verifies playback. Picker import playback is checked after deleting the source file.
 
-Seven automated tests use real HTTP/WebSocket connections and temporary SQLite databases. They cover scheduled playback frames, two-car playlist/command agreement, duplicate commands, guest authorization, clock timestamp responses, compact status traffic, authenticated reconnect, sharing permission/revocation, upload hash integrity, byte-range playback, missing tracks, session capacity, host disappearance/automatic progression, and backend restart recovery.
+The production APK is the debug artifact from this verified run, package app.carsync.music, versionCode 2, versionName 1.1.0. It uses a persistent private test key stored in GitHub Actions secrets; v1.0 must be uninstalled once before installation because its key differs. Do not commit keystores. UI preview collection is a separate test-only follow-up; app code is unchanged.
 
-See `backend-test-results.txt` for the final run and `backend-audit.txt` for the dependency audit. These are server/protocol tests; they do not render audio. The original test-audio files are included for physical playback testing.
+## Backend and cloud
 
-## Remaining acceptance testing
+Eight automated server tests cover authenticated two-car sessions, scheduled controls, duplicate commands, reconnect, rapid chained controls, sharing/revocation, MP3 hashes and byte ranges, missing files, session capacity, progression, and restart recovery. Rapid track-selection/play and seek/play now preserve pending commands.
 
-GitHub/cloud preparation: GitHub workflow YAML parsed successfully; both Render configuration files validated against Render's published JSON schema and Render's authenticated validation API. The selected root configuration is `plan: free`, with no paid disk. The public repository is uploaded to `moses-code-master/CarSyncMusic`. [GitHub run 38573596239](https://github.com/moses-code-master/CarSyncMusic/actions/runs/38573596239) passed the backend checks, compiled the Android APK, passed its tests and uploaded the APK artifact. The GitHub-built APK signature verified successfully.
+The free Render service is https://carsync-music.onrender.com. See cloud-test-results.txt for live HTTPS, secure WebSocket, upload/range access, authorization, reconnect, and telemetry checks. Free storage is temporary; deployment or restart can remove sessions and uploaded songs.
 
-The Render service is LIVE at `https://carsync-music.onrender.com`, on the Free plan in Frankfurt without a paid disk. Live verification passed HTTPS health, host creation, guest joining, two secure WebSocket clients, clock exchange, identical scheduled playback frames, real original MP3 upload, authenticated byte-range streaming, rejection of unauthenticated media requests, reconnect state recovery, and telemetry export. The test session and test audio were deleted afterward. See `cloud-test-results.txt`. These are control-plane and data-transfer checks, not acoustic playback tests.
+## Physical testing still required
 
-All ten physical scenarios in `TESTING.md` remain to be run on two devices. No audible synchronization accuracy, car-to-car delay, road-trip connection stability or real recovery-time figures have been claimed. The <100 ms objective remains a target requiring acoustic measurement and per-device output calibration. The Docker deployment is running on Render; Docker itself has not been run locally on this Windows machine.
+Emulator decoder/timeline tests do not prove sound from a particular phone's speaker, aftermarket head-unit compatibility, acoustic synchronization below 100 ms, Bluetooth output latency, or road-trip handover. Run docs/TESTING.md on the actual devices while parked. No physical speaker timing was measured.
