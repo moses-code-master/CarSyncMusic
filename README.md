@@ -36,7 +36,7 @@ Pinned project stack: AGP 8.9.2, Gradle 8.11.1, Kotlin 2.1.20, Compose BOM 2025.
 
 ## Internet deployment
 
-To keep the code on GitHub and run without your laptop, use the prepared GitHub APK-build workflow and Render cloud deployment files. Follow `docs/GITHUB-CLOUD.md`. The root `render.yaml` selects the free trial requested by the user, with temporary storage and no paid disk. Nothing has been uploaded to GitHub or deployed automatically.
+The source is available in the private GitHub repository [moses-code-master/CarSyncMusic](https://github.com/moses-code-master/CarSyncMusic), with a GitHub APK-build workflow and Render cloud deployment files. Follow `docs/GITHUB-CLOUD.md` to run without your laptop. The root `render.yaml` selects the free trial requested by the user, with temporary storage and no paid disk. The cloud music server is not deployed yet.
 
 Use a Linux machine with Docker and Docker Compose; a VPS may cost money even though the software is free. Point your domain's A/AAAA records at that machine, open inbound 80/443, and set `DOMAIN=music.yourdomain.example` in a project-root `.env`. Run `docker compose up -d --build`. Caddy obtains HTTPS certificates and proxies HTTP and WebSocket traffic to the private server container. No public 8080 port is needed. Check `https://your-domain/health` before entering the URL in both apps. The supplied example domain is a placeholder.
 
