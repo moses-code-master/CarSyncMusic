@@ -74,6 +74,23 @@ class PlaybackRuntimeTest {
         scenario.moveToState(androidx.lifecycle.Lifecycle.State.RESUMED)
         await("Returning activity lost playback") { sync.state.value.serviceReady && sync.state.value.playing }
     }
+    @Test fun localNextPreviousEndOfTrackAndSavedPlaylistWork() {
+        val source = File(context.cacheDir, "second.mp3")
+        instrumentation.context.assets.open("second.mp3").use { input -> source.outputStream().use { input.copyTo(it) } }
+        val second = importTrack(context, Uri.fromFile(source)); source.delete()
+        runBlocking { sync.dao.insert(second) }
+        await("Second song did not load") { sync.state.value.library.any { it.hash == second.hash } }
+        main { sync.listenLocal(listOf(track.hash, second.hash)) }
+        await("First track failed") { sync.state.value.index == 0 && sync.state.value.playing }
+        main { sync.command("next") }; await("Next failed") { sync.state.value.index == 1 && sync.state.value.playing }
+        main { sync.command("previous") }; await("Previous failed") { sync.state.value.index == 0 && sync.state.value.playing }
+        main { sync.command("seek", 44000) }; await("End-of-track advance failed") { sync.state.value.index == 1 && sync.state.value.playing }
+        main { sync.savePlaylist("Test saved playlist", listOf(track.hash, second.hash)) }
+        await("Save playlist failed") { sync.state.value.playlists.any { it.name == "Test saved playlist" } }
+        val saved = sync.state.value.playlists.first { it.name == "Test saved playlist" }
+        main { sync.savePlaylist("Renamed playlist", listOf(second.hash, track.hash), saved.id) }
+        await("Rename/reorder failed") { sync.state.value.playlists.any { it.id == saved.id && it.name == "Renamed playlist" && it.hashes == "${second.hash},${track.hash}" } }
+    }
     @Test @androidx.test.filters.SdkSuppress(minSdkVersion = 29)
     fun scanPhoneFindsMediaStoreMp3AndPlaysIt() {
         val values = android.content.ContentValues().apply {

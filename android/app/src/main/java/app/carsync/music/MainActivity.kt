@@ -262,7 +262,7 @@ private val pages = listOf("Home", "Music Library", "Playlists", "Create Session
         val wide = maxWidth > 680.dp
         val art = s.library.find { it.hash == t.hash }?.artPath
         if (wide) Row(horizontalArrangement = Arrangement.spacedBy(24.dp)) { Artwork(art, Modifier.size(260.dp)); Column(Modifier.weight(1f)) { PlaybackControls(s, sync) } }
-        else Column(verticalArrangement = Arrangement.spacedBy(20.dp)) { Artwork(art, Modifier.fillMaxWidth().height(220.dp)); PlaybackControls(s, sync) }
+        else Column(verticalArrangement = Arrangement.spacedBy(16.dp)) { Artwork(art, Modifier.fillMaxWidth().height(140.dp)); PlaybackControls(s, sync) }
     }
     if (!s.driving) {
         Row(Modifier.horizontalScroll(rememberScrollState()), horizontalArrangement = Arrangement.spacedBy(12.dp)) {
@@ -282,8 +282,8 @@ private val pages = listOf("Home", "Music Library", "Playlists", "Create Session
 @Composable private fun PlaybackControls(s: AppState, sync: SyncCoordinator) {
     val t = s.track ?: return
     Text(if (s.buffering) "BUFFERING" else if (s.connected && s.clockReady) "CONNECTED PLAYBACK" else "${s.role.uppercase()} PLAYBACK", color = Accent, fontSize = 13.sp)
-    Text(t.title, fontSize = 32.sp, fontWeight = FontWeight.Bold, maxLines = 2)
-    Text(t.artist, fontSize = 22.sp, color = Muted)
+    Text(t.title, fontSize = 26.sp, fontWeight = FontWeight.Bold, maxLines = 2)
+    Text(t.artist, fontSize = 18.sp, color = Muted)
     var seeking by remember { mutableStateOf<Float?>(null) }
     if (!s.driving) Slider(value = seeking ?: s.positionMs.toFloat().coerceIn(0f, t.durationMs.toFloat()), onValueChange = { seeking = it }, onValueChangeFinished = { seeking?.let { sync.command("seek", it.toLong()) }; seeking = null }, valueRange = 0f..t.durationMs.toFloat().coerceAtLeast(1f), enabled = s.canControl, modifier = Modifier.height(56.dp))
     Text("${time(s.positionMs)} / ${time(t.durationMs)}", color = Muted)
