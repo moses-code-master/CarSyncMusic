@@ -7,7 +7,7 @@ plugins {
 android {
     namespace = "app.carsync.music"
     compileSdk = 35
-    defaultConfig { applicationId = "app.carsync.music"; minSdk = 26; targetSdk = 35; versionCode = 2; versionName = "1.1.0"; testInstrumentationRunner = "androidx.test.runner.AndroidJUnitRunner" }
+    defaultConfig { applicationId = "app.carsync.music"; minSdk = 26; targetSdk = 35; versionCode = 3; versionName = "1.1.1"; testInstrumentationRunner = "androidx.test.runner.AndroidJUnitRunner" }
     buildFeatures { compose = true }
     compileOptions { sourceCompatibility = JavaVersion.VERSION_17; targetCompatibility = JavaVersion.VERSION_17 }
     kotlinOptions { jvmTarget = "17" }
@@ -40,3 +40,4 @@ dependencies {
     androidTestImplementation("androidx.test.ext:junit:1.2.1")
     androidTestImplementation("androidx.test.uiautomator:uiautomator:2.3.0")
 }
+

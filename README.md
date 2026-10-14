@@ -5,7 +5,7 @@ Native Kotlin/Compose Android music app plus a self-hosted Node.js/WebSocket rel
 ## Your live cloud setup
 
 - Public source: [moses-code-master/CarSyncMusic](https://github.com/moses-code-master/CarSyncMusic)
-- APK: [v1.1.0 test release](https://github.com/moses-code-master/CarSyncMusic/releases/tag/v1.1.0)
+- APK: [v1.1.1 test release](https://github.com/moses-code-master/CarSyncMusic/releases/tag/v1.1.1)
 - Server address prefilled in Settings on BOTH cars: `https://carsync-music.onrender.com`
 - [Server health check](https://carsync-music.onrender.com/health)
 
@@ -27,7 +27,7 @@ Local-only playback: open Library and tap a song without joining a session. Volu
 
 ## Install on head units
 
-When upgrading from v1.0.0, uninstall the old app first because its signing key differs; this clears its saved library and session. Then install v1.1.0 and scan/import music again. Future GitHub builds use a persistent private test signing key. Copy `CarSyncMusic.apk` to USB or internal storage, open it with the head unit file manager, and allow installation from that file manager when prompted. This APK is for testing, signed with a development key. For public distribution build and sign your own release APK with a private keystore. Do not install while driving.
+When upgrading from v1.0.0, uninstall the old app first because its signing key differs; this clears its saved library and session. Then install v1.1.1 and scan/import music again. Future GitHub builds use a persistent private test signing key. Copy `CarSyncMusic.apk` to USB or internal storage, open it with the head unit file manager, and allow installation from that file manager when prompted. This APK is for testing, signed with a development key. For public distribution build and sign your own release APK with a private keystore. Do not install while driving.
 
 For USB debugging, `adb install -r CarSyncMusic-debug.apk`. Allow notification permission on Android 13+ to see media controls. Some manufacturers require allowing background activity or disabling battery restrictions for CarSync. Ordinary Android head units are supported; Android Auto projection / certified Android Automotive app integration is outside this project.
 
@@ -71,4 +71,5 @@ Read `docs/ARCHITECTURE.md`, `docs/TESTING.md`, and `docs/VALIDATION.md` for the
 ## Source references
 
 Android background-playback architecture follows [MediaSessionService guidance](https://developer.android.com/media/media3/session/background-playback). Compose dependency alignment follows the [official BOM guide](https://developer.android.com/develop/ui/compose/bom). Build compatibility: [AGP 8.9 release notes](https://developer.android.com/build/releases/agp-8-9-0-release-notes).
+
 
