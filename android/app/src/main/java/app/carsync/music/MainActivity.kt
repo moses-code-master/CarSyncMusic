@@ -71,6 +71,8 @@ private val pages = listOf("Home", "Music Library", "Playlists", "Create Session
 @Composable fun CarSyncScreen(sync: SyncCoordinator) {
     val s by sync.state.collectAsStateWithLifecycle()
     var page by rememberSaveableCompat("Home")
+    val pageScroll = rememberScrollState()
+    LaunchedEffect(page) { pageScroll.scrollTo(0) }
     var search by remember { mutableStateOf("") }
     var selected by remember { mutableStateOf(listOf<String>()) }
     var playlistName by remember { mutableStateOf("Road trip") }
@@ -119,7 +121,7 @@ private val pages = listOf("Home", "Music Library", "Playlists", "Create Session
                 }
             }
         }) { insets ->
-            Column(Modifier.fillMaxSize().padding(insets).verticalScroll(rememberScrollState()).padding(20.dp), verticalArrangement = Arrangement.spacedBy(16.dp)) {
+            Column(Modifier.fillMaxSize().padding(insets).verticalScroll(pageScroll).padding(20.dp), verticalArrangement = Arrangement.spacedBy(16.dp)) {
                 if (s.driving && page !in listOf("Now Playing", "Connected Cars", "Settings")) { Text("Driving mode: only playback and connection status are available."); LargeButton("Now Playing") { page = "Now Playing" } }
                 else when (page) {
                     "Home" -> {
@@ -329,3 +331,4 @@ private fun qrBitmap(text: String): Bitmap {
     val pixels = IntArray(320 * 320) { i -> if (matrix[i % 320, i / 320]) android.graphics.Color.BLACK else android.graphics.Color.WHITE }
     return Bitmap.createBitmap(pixels, 320, 320, Bitmap.Config.ARGB_8888)
 }
+

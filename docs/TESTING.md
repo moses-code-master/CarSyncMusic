@@ -6,6 +6,8 @@ Backend: `cd backend`, `npm ci`, `npm test`. Tests open real HTTP/WebSocket conn
 
 Android: in `android`, run `gradlew testDebugUnitTest assembleDebug`. JVM tests cover clock offsets, rejection of delay outliers, pause/play projection and bounded drift correction. Build success is a compilation check, not a hardware media test.
 
+Native runtime: start the backend on port 8080, run an Android emulator, and execute `gradlew connectedDebugAndroidTest`. Tests use `http://10.0.2.2:8080`, original playable MP3 fixtures, and real ExoPlayer decoders. GitHub runs this suite on API 26 and 35. It covers local/service/host/guest playback and missing-file relay recovery; API 35 also exercises phone MediaStore scanning. See VALIDATION.md for completed results. This does not measure physical speaker output.
+
 ## Setup and measurements
 
 Use two parked head units or Android phones, preferably with wired speakers. Configure the same server and import the two original MP3 pulse tracks included in `test-audio` (or another recording you may share). Start at low volume. Set local latency to zero initially. Place both outputs within reach of a common recorder; one stereo recording with one speaker per channel avoids comparing unsynchronized phone-recorder clocks. Never operate testing controls while driving; a passenger can observe handover while the driver drives normally.
@@ -34,3 +36,4 @@ Additional checks: background activity minimized for 30 minutes; screen sleep; n
 ## Results template
 
 Copy `measurement-template.csv` per test run. Fill hardware/acoustic results only after measuring them. Network control tests and compiled code cannot validate real head-unit output latency. The project intentionally includes no invented physical accuracy measurements.
+
