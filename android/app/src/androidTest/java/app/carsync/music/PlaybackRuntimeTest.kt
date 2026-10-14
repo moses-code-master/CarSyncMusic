@@ -35,6 +35,12 @@ class PlaybackRuntimeTest {
         while (SystemClock.elapsedRealtime() < deadline) { if (condition()) return; Thread.sleep(100) }
         fail("$label. State: ${sync.state.value}")
     }
+    private fun capture(device: UiDevice, name: String) {
+        val file = File(context.getExternalFilesDir(null), name)
+        assertTrue(device.takeScreenshot(file))
+        device.executeShellCommand("mkdir -p /sdcard/Download/CarSync-previews")
+        device.executeShellCommand("cp ${file.absolutePath} /sdcard/Download/CarSync-previews/$name")
+    }
     @Before fun setup() {
         context.getSharedPreferences("session", Context.MODE_PRIVATE).edit().clear().commit()
         scenario = ActivityScenario.launch(MainActivity::class.java)
@@ -61,9 +67,9 @@ class PlaybackRuntimeTest {
         val device = UiDevice.getInstance(instrumentation)
         device.findObject(UiSelector().text("Player")).click()
         Thread.sleep(1500)
-        device.takeScreenshot(File(context.getExternalFilesDir(null), "player-portrait.png"))
+        capture(device, "player-portrait.png")
         device.setOrientationLeft(); Thread.sleep(1500)
-        device.takeScreenshot(File(context.getExternalFilesDir(null), "player-landscape.png")); device.setOrientationNatural()
+        capture(device, "player-landscape.png"); device.setOrientationNatural()
     }
     @Test fun playbackSurvivesActivityClosingAndServiceReconnects() {
         main { sync.playTrack(track.hash) }
@@ -106,7 +112,7 @@ class PlaybackRuntimeTest {
             main { sync.scanPhone() }; await("Phone scanner did not find MP3") { !sync.state.value.busy && sync.state.value.library.any { it.uri == uri.toString() } }
             main { sync.playTrack(track.hash) }; await("Scanned phone MP3 did not play") { sync.state.value.playing && sync.state.value.positionMs > 1000 }
             val device = UiDevice.getInstance(instrumentation); device.findObject(UiSelector().text("Library")).click(); Thread.sleep(1000)
-            device.takeScreenshot(File(context.getExternalFilesDir(null), "library.png"))
+            capture(device, "library.png")
         } finally { main { sync.leave() }; context.contentResolver.delete(uri, null, null); runBlocking { sync.dao.insert(track) } }
     }
     @Test fun hostAndGuestPlaySameFileAndFollowPauseSeekAndReconnect() {
@@ -153,3 +159,4 @@ class PlaybackRuntimeTest {
         } finally { main { guest.leave(); guest.shutdown(); p.release() }; db.close(); main { sync.endSession() }; await("Host session cleanup") { sync.state.value.code.isBlank() } }
     }
 }
+

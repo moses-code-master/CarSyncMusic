@@ -106,7 +106,7 @@ jobs:
             sh gradlew connectedDebugAndroidTest --no-daemon || result=$?
             mkdir -p ../runtime-results
             adb logcat -d > ../runtime-results/logcat.txt || true
-            adb pull /sdcard/Android/data/app.carsync.music/files ../runtime-results/screenshots || true
+            adb pull /sdcard/Download/CarSync-previews ../runtime-results/screenshots || true
             exit $result
       - name: Collect device diagnostics and screen captures
         if: always()
@@ -121,3 +121,4 @@ jobs:
             android/app/build/reports/androidTests
             android/app/build/outputs/androidTest-results
             runtime-results
+
