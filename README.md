@@ -1,11 +1,11 @@
 # CarSync Music
 
-Native Kotlin/Compose Android music app plus a self-hosted Node.js/WebSocket relay. The app plays ordinary MP3 files through each head unit's speakers, without Google Play Services or paid music subscriptions. Requires Android 8.0 or newer, third-party APK support, and network access.
+Native Kotlin/Compose Android music app plus a self-hosted Node.js/WebSocket relay. The app plays ordinary MP3 files through each head unit's speakers, without Google Play Services or paid music subscriptions. Requires Android 6.0 or newer, third-party APK support, and network access.
 
 ## Your live cloud setup
 
 - Public source: [moses-code-master/CarSyncMusic](https://github.com/moses-code-master/CarSyncMusic)
-- APK: [v1.1.1 test release](https://github.com/moses-code-master/CarSyncMusic/releases/tag/v1.1.1)
+- APK: [v1.2.0 test release](https://github.com/moses-code-master/CarSyncMusic/releases/tag/v1.2.0)
 - Server address prefilled in Settings on BOTH cars: `https://carsync-music.onrender.com`
 - [Server health check](https://carsync-music.onrender.com/health)
 
@@ -27,9 +27,18 @@ Local-only playback: open Library and tap a song without joining a session. Volu
 
 ## Install on head units
 
-When upgrading from v1.0.0, uninstall the old app first because its signing key differs; this clears its saved library and session. Then install v1.1.1 and scan/import music again. Future GitHub builds use a persistent private test signing key. Copy `CarSyncMusic.apk` to USB or internal storage, open it with the head unit file manager, and allow installation from that file manager when prompted. This APK is for testing, signed with a development key. For public distribution build and sign your own release APK with a private keystore. Do not install while driving.
+When upgrading from v1.0.0, uninstall the old app first because its signing key differs; this clears its saved library and session. Then install v1.2.0 and scan/import music again. Future GitHub builds use a persistent private test signing key. Copy `CarSyncMusic.apk` to USB or internal storage, open it with the head unit file manager, and allow installation from that file manager when prompted. The published APK uses a non-debuggable release build, signed with the persistent private test key. For public distribution build and sign your own release APK with a private keystore. Do not install while driving.
 
 For USB debugging, `adb install -r CarSyncMusic-debug.apk`. Allow notification permission on Android 13+ to see media controls. Some manufacturers require allowing background activity or disabling battery restrictions for CarSync. Ordinary Android head units are supported; Android Auto projection / certified Android Automotive app integration is outside this project.
+
+## If Android says “App not installed”
+
+- Check Settings → About phone → Android version. Version 1.2 supports Android 6.0 (API 23) and newer. Earlier versions of CarSync required Android 8. Android 5 and older remain unsupported by this build.
+- If version 1.0 is installed, uninstall it once before installing the new APK because its signing key differs. This clears the old app library/session; scan or import again afterward. Versions 1.1 and newer share the persistent signing key and can update in place.
+- Download the complete `CarSyncMusic.apk` asset from Releases; do not try installing a source ZIP. Allow “Install unknown apps” for the browser or file manager used to open it. Ensure sufficient free storage.
+- The APK is universal and includes ARM 32-bit, ARM 64-bit, x86 and x86_64 native libraries. If installation still fails, record the exact Android version and installer message; USB debugging can provide the precise error with `adb install -r CarSyncMusic.apk`.
+
+For Xiaomi/Redmi phones: search Settings for “Install unknown apps”, select the browser or File Manager used to open the APK, and permit installation from that app. Menu locations differ by MIUI/HyperOS version; see [Xiaomi's official instructions](https://www.mi.com/global/support/faq/details/KA-06974/). A Redmi 12 is newer than the app's minimum requirement; “App not installed” on that model does not establish an Android-version problem.
 
 ## Build an APK
 
@@ -71,5 +80,8 @@ Read `docs/ARCHITECTURE.md`, `docs/TESTING.md`, and `docs/VALIDATION.md` for the
 ## Source references
 
 Android background-playback architecture follows [MediaSessionService guidance](https://developer.android.com/media/media3/session/background-playback). Compose dependency alignment follows the [official BOM guide](https://developer.android.com/develop/ui/compose/bom). Build compatibility: [AGP 8.9 release notes](https://developer.android.com/build/releases/agp-8-9-0-release-notes).
+
+
+
 
 

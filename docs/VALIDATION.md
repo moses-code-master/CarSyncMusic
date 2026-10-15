@@ -1,21 +1,21 @@
-# Verification performed — 15 October 2026
+# Verification performed — 15 October 2026, version 1.2.0
 
-## Android 1.1.1
+## Compatibility changes
 
-[Verified GitHub run](https://github.com/moses-code-master/CarSyncMusic/actions/runs/38654328782) passed Android build, three JVM tests, eight backend tests, and native instrumentation jobs on API 26 (Android 8) and API 35 (Android 15).
+Minimum Android version lowered from API 26 (Android 8.0) to API 23 (Android 6.0). Version code 4, version name 1.2.0. Published APK uses the release build with debuggable=false, explicit v1/v2 signatures, and the same persistent private test signing key as 1.1/1.1.1. This retains update compatibility for those builds. Version 1.0 used a different key and needs uninstall/reinstall.
 
-API 35: six runtime tests passed, zero failures/errors. API 26: five passed, with the MediaStore fixture test excluded because it requires API 29. Native tests decode original MP3 audio through ExoPlayer and assert position advancement, pause, seek, resume, next/previous, end-of-track advance, playlist rename/reorder, background service playback, host/guest shared controls, reconnect, and permitted HTTP relay playback. The API 35 test inserts an MP3 into the phone's MediaStore, scans it, and verifies playback. Picker import playback is checked after deleting the source file.
+The APK includes armeabi-v7a, arm64-v8a, x86 and x86_64 libraries. Android 5 and older remain unsupported. Android 15 already met the previous APK's minimum version; a generic “App not installed” message on a phone with no older installation has not established its root cause.
 
-The production APK is the debug artifact from this verified run, package app.carsync.music, versionCode 3, versionName 1.1.1. It uses a persistent private test key stored in GitHub Actions secrets; v1.0 must be uninstalled once before installation because its key differs. Do not commit keystores. Portrait and landscape screen previews are collected with native tests; page navigation resets scroll and landscape playback uses compact controls.
+## Automated evidence
 
-## Backend and cloud
+[Initial Android 6 compatibility run](https://github.com/moses-code-master/CarSyncMusic/actions/runs/38760760764) passed lint, APK build, three JVM clock tests, eight backend tests, five native playback tests on API 23, five on API 26, and six on API 35. The MediaStore fixture test requires API 29 and is excluded on older emulators.
 
-Eight automated server tests cover authenticated two-car sessions, scheduled controls, duplicate commands, reconnect, rapid chained controls, sharing/revocation, MP3 hashes and byte ranges, missing files, session capacity, progression, and restart recovery. Rapid track-selection/play and seek/play now preserve pending commands.
+[Release package verification](https://github.com/moses-code-master/CarSyncMusic/actions/runs/38761502843) builds the signed release APK and checks clean installation and launch on API 23, 26 and 35 before executing the native playback suite. The artifact CarSyncMusic-release-apk contains the published APK. Android lint checks the lowered API compatibility.
 
-The free Render service is https://carsync-music.onrender.com. See cloud-test-results.txt for live HTTPS, secure WebSocket, upload/range access, authorization, reconnect, and telemetry checks. Free storage is temporary; deployment or restart can remove sessions and uploaded songs.
+Runtime tests cover imported MP3 decoding after the source file is removed, advancing position, pause/seek/resume, next/previous/end progression, playlist editing, foreground service playback, host/guest shared playback and reconnect, missing audio, sharing permission and authenticated HTTP MP3 relay playback. API 35 also scans and plays a MediaStore MP3.
 
-## Physical testing still required
+## Cloud and physical testing
 
-Emulator decoder/timeline tests do not prove sound from a particular phone's speaker, aftermarket head-unit compatibility, acoustic synchronization below 100 ms, Bluetooth output latency, or road-trip handover. Run docs/TESTING.md on the actual devices while parked. No physical speaker timing was measured.
+The backend is unchanged in 1.2.0. Its free Render service is https://carsync-music.onrender.com; see cloud-test-results.txt for live secure WebSocket, rapid command sequencing, MP3 transfer/authorization, reconnect and telemetry checks. Free storage is temporary.
 
-
+Emulator installation success does not identify an affected manufacturer's installer restriction or prove that every physical phone installs successfully. If a fresh install still fails, obtain the exact phone model, Android version and installer error (adb install provides a detailed error code). Physical speakers, manufacturer background policies, Bluetooth output latency and sub-100 ms acoustic synchronization still require device testing.
