@@ -338,7 +338,10 @@ class SyncCoordinator(private val context: Context, val dao: LibraryDao, prefere
                 }
                 message("Audio relay ready. The guest starts automatically.")
             } catch (e: Exception) { message(e.message ?: "Upload failed") }
-            finally { update { it.copy(busy = false) } }
+            finally {
+                update { it.copy(busy = false) }
+                if (state.value.queue.map { it.hash } != s.queue.map { it.hash }) uploadMissingAudio()
+            }
         }
     }
     fun retryAudio() { preparedHash = ""; desired?.let { schedule(it, true) } }

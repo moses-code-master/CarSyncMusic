@@ -152,7 +152,10 @@ class PlaybackRuntimeTest {
         }
         try {
             await("Missing-file warning absent") { guest.state.value.missing }; assertFalse(guest.state.value.playing)
-            main { sync.settings(sharing = true) }; await("Sharing not enabled") { sync.state.value.sharing }
+            val device = UiDevice.getInstance(instrumentation)
+            device.findObject(UiSelector().text("Player")).click()
+            device.findObject(UiSelector().text("Share music with guest")).click()
+            await("Sharing not enabled") { sync.state.value.sharing }
             await("Automatic upload did not complete") { sync.state.value.message.contains("Audio relay ready") }
             await("Guest did not automatically decode/play relay MP3") { guest.state.value.playing && guest.state.value.positionMs > 1000 }
             main { sync.command("pause") }; await("Relay guest pause failed") { !guest.state.value.playing }
