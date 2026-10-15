@@ -1,21 +1,25 @@
-# Verification performed — 15 October 2026, version 1.2.0
+# Verification performed — 16 October 2026, version 1.3.0
 
-## Compatibility changes
+## Guest audio recovery fix
 
-Minimum Android version lowered from API 26 (Android 8.0) to API 23 (Android 6.0). Version code 4, version name 1.2.0. Published APK uses the release build with debuggable=false, explicit v1/v2 signatures, and the same persistent private test signing key as 1.1/1.1.1. This retains update compatibility for those builds. Version 1.0 used a different key and needs uninstall/reinstall.
+Previously, uploaded MP3s were broadcast in a session snapshot without changing the playback revision. Android only rescheduled audio for playback revisions/reconnect/revocation, so a guest with no local file could remain silent after an upload until Retry audio was tapped. The old test explicitly called Retry audio and did not cover automatic recovery.
 
-The APK includes armeabi-v7a, arm64-v8a, x86 and x86_64 libraries. Android 5 and older remain unsupported. Android 15 already met the previous APK's minimum version; a generic “App not installed” message on a phone with no older installation has not established its root cause.
+The backend now sends audioAvailable hashes independently of playback revisions. Android waits for the requested file, then prepares and catches up automatically when its availability changes. The host Player exposes an explicit Share music with guest action. After consent, missing playlist audio uploads automatically. Guests see whether sharing is off or the upload is pending. Files are not shared until the host opts in; disabling sharing removes uploaded audio and stops guest relay playback.
 
-## Automated evidence
+## Automated checks
 
-[Initial Android 6 compatibility run](https://github.com/moses-code-master/CarSyncMusic/actions/runs/38760760764) passed lint, APK build, three JVM clock tests, eight backend tests, five native playback tests on API 23, five on API 26, and six on API 35. The MediaStore fixture test requires API 29 and is excluded on older emulators.
+[Version 1.3 verification](https://github.com/moses-code-master/CarSyncMusic/actions/runs/38819642046) builds the signed non-debuggable release APK, runs Android lint and three JVM tests, runs eight backend tests, and verifies clean release installation/launch plus native playback on API 23, 26 and 35.
 
-[Release package verification](https://github.com/moses-code-master/CarSyncMusic/actions/runs/38761502843) builds the signed release APK and checks clean installation and launch on API 23, 26 and 35 before executing the native playback suite. The artifact CarSyncMusic-release-apk contains the published APK. Android lint checks the lowered API compatibility.
+The guest regression test has an empty local library. It clicks the actual host Player → Share music with guest button, waits for automatic upload and guest playback without any guest retry action, tests shared pause/resume, then revokes sharing and verifies silence/missing-file state. Other tests cover local decoding/seek/resume, background service playback, matching-local-file host/guest synchronization/reconnect, playlist edits and API 35 phone scanning.
 
-Runtime tests cover imported MP3 decoding after the source file is removed, advancing position, pause/seek/resume, next/previous/end progression, playlist editing, foreground service playback, host/guest shared playback and reconnect, missing audio, sharing permission and authenticated HTTP MP3 relay playback. API 35 also scans and plays a MediaStore MP3.
+The backend regression verifies that an uploaded file becomes available to the guest without a change to its playback revision, and that revocation clears availability. Live HTTPS/WebSocket checks passed the same notification path, rapid controls, authenticated MP3 byte-range transfer, reconnect and telemetry export. See cloud-test-results.txt. Test sessions and uploaded test files were deleted.
 
-## Cloud and physical testing
+## APK and deployment
 
-The backend is unchanged in 1.2.0. Its free Render service is https://carsync-music.onrender.com; see cloud-test-results.txt for live secure WebSocket, rapid command sequencing, MP3 transfer/authorization, reconnect and telemetry checks. Free storage is temporary.
+Version code 5, version name 1.3.0, minimum Android 6.0 (API 23), target API 35. Universal ARM32/ARM64/x86/x86_64 APK with v1/v2 signatures and the persistent private test key used since 1.1. Update both phones. Version 1.0 requires uninstall/reinstall because its key differs; versions 1.1+ can update in place.
 
-Emulator installation success does not identify an affected manufacturer's installer restriction or prove that every physical phone installs successfully. If a fresh install still fails, obtain the exact phone model, Android version and installer error (adb install provides a detailed error code). Physical speakers, manufacturer background policies, Bluetooth output latency and sub-100 ms acoustic synchronization still require device testing.
+Backend deployed to https://carsync-music.onrender.com on the existing free service. The app and server both need this fix for automatic guest recovery. Free hosting may sleep or lose sessions/uploads on restart. A fresh session and a new permitted upload may be needed after deployment.
+
+## Physical testing limits
+
+These are emulator decoder/timeline tests and real cloud protocol/transfer checks. They do not confirm speaker output or Bluetooth routing on the user's phones, manufacturer power-policy behavior, or sub-100 ms acoustic synchronization. If the guest remains silent after updating both phones and enabling sharing, inspect its on-screen message and audio output path. A generic phone installation error still needs its installer details if the signed release cannot be installed.

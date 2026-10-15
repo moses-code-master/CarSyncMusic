@@ -58,3 +58,6 @@ Media files use `{code}-{sha256}.mp3` names under the private data directory. Up
 ## Trust and deployment boundary
 
 TLS terminates at Caddy. Private LAN HTTP is allowed by the Android app for hotspot use, and is vulnerable to trusted-LAN interception; public endpoints require HTTPS in the UI. Six-digit invitation codes are throttled per connecting IP, sessions hold two cars, and subsequent access uses high-entropy tokens. Limits are in-process and single-node; a production multi-tenant deployment would need stronger enrollment, durable per-user quotas, gateway abuse protection, authorization review and operational monitoring. No cloud account is provisioned or deployed by this source delivery.
+
+Guest audio readiness: session snapshots include an audioAvailable array containing uploaded playlist hashes only while sharing is permitted. Upload completion broadcasts a new snapshot without incrementing the playback revision. Android responds to availability changes independently of playback revisions and catches up to the authoritative timeline. The host uploads missing playlist audio automatically after its explicit sharing opt-in; guests wait instead of requesting unavailable files. Local matching MP3s continue to work without sharing.
+

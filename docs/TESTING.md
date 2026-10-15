@@ -27,7 +27,7 @@ Host Settings → Export synchronization telemetry saves a CSV with each car's p
 | Wi-Fi to mobile data | Start using public HTTPS over Wi-Fi, leave its coverage with data enabled | Same server reachable; reconnect and settle. LAN-only endpoint intentionally cannot work outside LAN. |
 | Slower processor | Use older head unit / CPU-throttled emulator, cold MP3 decode | Buffering is visible; no false sync claim; late start catches up after readiness. Measure settling and drift. |
 | Identical MP3s | Import exact copies with matching SHA-256 | Relay uploads unnecessary; network usage should be metadata/status only. |
-| Guest lacks song | Remove/mismatch guest file before joining | Clear missing-song warning; guest does not play wrong track. Host opts in and uploads, then guest retries audio; measure data and buffering. |
+| Guest lacks song | Remove/mismatch guest file before joining | Clear missing-song warning; guest does not play wrong track. Host Player → Share music with guest. Missing playlist audio uploads automatically and the guest starts without Retry audio; measure data and buffering. Revoke sharing and verify the remote guest stops. |
 | Host closes unexpectedly | Force-stop host while guest plays | Host silent; guest continues local/shared uploaded audio; server advances playlist; host reopening restores credentials and catches up. Also test server restart: session recovers paused. |
 | Late join | Host plays for 20 seconds, then guest joins | Clock sampling first, then projected position; no restart from zero; record convergence. |
 
@@ -36,4 +36,5 @@ Additional checks: background activity minimized for 30 minutes; screen sleep; n
 ## Results template
 
 Copy `measurement-template.csv` per test run. Fill hardware/acoustic results only after measuring them. Network control tests and compiled code cannot validate real head-unit output latency. The project intentionally includes no invented physical accuracy measurements.
+
 

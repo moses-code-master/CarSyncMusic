@@ -6,7 +6,7 @@ GitHub stores the source and runs APK builds. A cloud web service runs the real-
 
 The project is uploaded to the public repository [moses-code-master/CarSyncMusic](https://github.com/moses-code-master/CarSyncMusic), with the user's explicit permission to make its source public. The folders `backend`, `android`, `render.yaml`, and `.github` are directly at the repository root. Do not upload build folders, node_modules, local.properties, tokens or personal MP3s. The provided `.gitignore` covers generated app/server files.
 
-The `.github/workflows/build.yml` workflow runs backend tests and builds the Android APK on pushes to main, pull requests and manual runs. [The verified GitHub build](https://github.com/moses-code-master/CarSyncMusic/actions/runs/38761502843) passed all five jobs, including native playback on Android API 23, 26 and 35 and uploaded the APK. Open the run → Artifacts → CarSyncMusic-release-apk. Extract the APK before copying it to each car. The workflow installs Android SDK tools explicitly.
+The `.github/workflows/build.yml` workflow runs backend tests and builds the Android APK on pushes to main, pull requests and manual runs. [The verified GitHub build](https://github.com/moses-code-master/CarSyncMusic/actions/runs/38819642046) passed all five jobs, including native playback on Android API 23, 26 and 35 and uploaded the APK. Open the run → Artifacts → CarSyncMusic-release-apk. Extract the APK before copying it to each car. The workflow installs Android SDK tools explicitly.
 
 Version 1.1 uses a persistent test signing key restored from a private GitHub Actions secret. Uninstall v1.0.0 once before installing v1.1 because the old key differs; this clears the old library/session. Subsequent builds with the same key support updates. For stable updates/public distribution, configure a private release keystore through GitHub Actions secrets and sign releases; never commit a keystore or its password. Actions usage/storage may incur charges depending on your GitHub plan and usage.
 
@@ -38,6 +38,7 @@ Import identical local files on both devices, expect to recreate sessions after 
 - [Render persistent disks](https://render.com/docs/disks)
 - [Render free-service restrictions](https://render.com/docs/free)
 - [Render Blueprint reference](https://render.com/docs/blueprint-spec)
+
 
 
 

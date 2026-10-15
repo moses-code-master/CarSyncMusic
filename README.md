@@ -5,7 +5,7 @@ Native Kotlin/Compose Android music app plus a self-hosted Node.js/WebSocket rel
 ## Your live cloud setup
 
 - Public source: [moses-code-master/CarSyncMusic](https://github.com/moses-code-master/CarSyncMusic)
-- APK: [v1.2.0 test release](https://github.com/moses-code-master/CarSyncMusic/releases/tag/v1.2.0)
+- APK: [v1.3.0 test release](https://github.com/moses-code-master/CarSyncMusic/releases/tag/v1.3.0)
 - Server address prefilled in Settings on BOTH cars: `https://carsync-music.onrender.com`
 - [Server health check](https://carsync-music.onrender.com/health)
 
@@ -21,13 +21,13 @@ The cloud backend is deployed on Render's Free plan in Frankfurt, without a paid
 6. Host → Create Session. Guest → Join Session, enter six-digit code. Alternatively import a QR image from the host's Create Session page; review and save the suggested server address before joining. External QR readers can open the `carsync://join` link, which fills the Join Session code and suggests the server address for review.
 7. Host → Music Library → select tracks in order → Save Playlist or Publish to Session. Wait for clocks to synchronize (about six seconds), then Play. Commands deliberately take about 1.8 seconds to execute so both devices have a future deadline.
 8. If both devices imported byte-identical MP3s, only metadata and synchronization traffic cross the network. Different tags/encodings change the SHA-256 hash even if the song sounds identical.
-9. Missing song: guest gets an explicit message. Import the identical MP3 or host Settings → permission-to-share toggle → Upload current playlist to relay. Once upload completes, guest taps Retry audio. Uploaded files are streamed with HTTP range requests; metadata-only playlist synchronization does not distribute audio.
+9. Missing song: guest gets an explicit waiting message. Import the identical MP3, or on the host Player tap Share music with guest for audio you have permission to share. The host uploads missing playlist songs automatically after permission is enabled. The guest starts automatically when each song is ready; no manual retry is required. Uploaded files are streamed with HTTP range requests; metadata-only playlist synchronization does not distribute audio.
 
 Local-only playback: open Library and tap a song without joining a session. Volume always affects only the current car. Playlist editing supports rename, remove, add, reorder and shuffle; synchronized repeat supports off/one/all. Shuffle publishes a new canonical order and resets to track one.
 
 ## Install on head units
 
-When upgrading from v1.0.0, uninstall the old app first because its signing key differs; this clears its saved library and session. Then install v1.2.0 and scan/import music again. Future GitHub builds use a persistent private test signing key. Copy `CarSyncMusic.apk` to USB or internal storage, open it with the head unit file manager, and allow installation from that file manager when prompted. The published APK uses a non-debuggable release build, signed with the persistent private test key. For public distribution build and sign your own release APK with a private keystore. Do not install while driving.
+When upgrading from v1.0.0, uninstall the old app first because its signing key differs; this clears its saved library and session. Then install v1.3.0 and scan/import music again. Future GitHub builds use a persistent private test signing key. Copy `CarSyncMusic.apk` to USB or internal storage, open it with the head unit file manager, and allow installation from that file manager when prompted. The published APK uses a non-debuggable release build, signed with the persistent private test key. For public distribution build and sign your own release APK with a private keystore. Do not install while driving.
 
 For USB debugging, `adb install -r CarSyncMusic-debug.apk`. Allow notification permission on Android 13+ to see media controls. Some manufacturers require allowing background activity or disabling battery restrictions for CarSync. Ordinary Android head units are supported; Android Auto projection / certified Android Automotive app integration is outside this project.
 
@@ -80,6 +80,7 @@ Read `docs/ARCHITECTURE.md`, `docs/TESTING.md`, and `docs/VALIDATION.md` for the
 ## Source references
 
 Android background-playback architecture follows [MediaSessionService guidance](https://developer.android.com/media/media3/session/background-playback). Compose dependency alignment follows the [official BOM guide](https://developer.android.com/develop/ui/compose/bom). Build compatibility: [AGP 8.9 release notes](https://developer.android.com/build/releases/agp-8-9-0-release-notes).
+
 
 
 
