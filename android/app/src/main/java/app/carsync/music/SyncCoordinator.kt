@@ -22,7 +22,7 @@ data class AppState(
     val library: List<Track> = emptyList(), val playlists: List<SavedPlaylist> = emptyList(), val queue: List<RemoteTrack> = emptyList(), val cars: List<Car> = emptyList(),
     val index: Int = 0, val positionMs: Long = 0, val playing: Boolean = false, val buffering: Boolean = false, val missing: Boolean = false,
     val clockReady: Boolean = false, val driftMs: Long? = null, val rttMs: Long = 0, val volume: Float = 0.8f,
-    val guestControls: Boolean = false, val sharing: Boolean = false, val repeat: String = "off", val driving: Boolean = false,
+    val guestControls: Boolean = false, val sharing: Boolean = false, val audioAvailable: Set<String> = emptySet(), val audioManifestKnown: Boolean = false, val repeat: String = "off", val driving: Boolean = false,
     val latencyMs: Long = 0, val message: String = "Import MP3s and create or join a session.", val busy: Boolean = false,
     val invitationCode: String = "", val invitationServer: String = "", val serviceReady: Boolean = false, val requestedPlaying: Boolean = false, val audioError: String = ""
 ) { val canControl get() = role == "host" || role == "local" || guestControls; val track get() = queue.getOrNull(index) }
@@ -158,13 +158,16 @@ class SyncCoordinator(private val context: Context, val dao: LibraryDao, prefere
                 val cars = cars(x.getJSONArray("cars"))
                 val wasConnected = state.value.connected
                 val sharingRevoked = state.value.sharing && !x.getBoolean("sharing")
-                update { it.copy(connected = true, queue = queue, cars = cars, guestControls = x.getBoolean("guestControls"), sharing = x.getBoolean("sharing"), repeat = x.getString("repeat"), message = if (!wasConnected) "Session connected. Matching clocks…" else it.message) }
+                val available = x.optJSONArray("audioAvailable")?.let { a -> (0 until a.length()).map { a.getString(it) }.toSet() } ?: emptySet()
+                val audioChanged = state.value.audioAvailable != available || state.value.sharing != x.getBoolean("sharing")
+                update { it.copy(connected = true, queue = queue, cars = cars, guestControls = x.getBoolean("guestControls"), sharing = x.getBoolean("sharing"), audioAvailable = available, audioManifestKnown = x.has("audioAvailable"), repeat = x.getString("repeat"), message = if (!wasConnected) "Session connected. Matching clocks…" else it.message) }
                 previous = x.optJSONObject("previous")?.let(::frame)
                 val f = frame(x.getJSONObject("frame"))
                 update { it.copy(requestedPlaying = f.playing) }
                 if (sharingRevoked && state.value.library.none { it.hash == queue.getOrNull(f.index)?.hash }) { player?.stop(); preparedHash = "" }
-                if (desired?.revision != f.revision || !wasConnected || sharingRevoked) { desired = f; if (clock.ready) schedule(f, true) }
+                if (desired?.revision != f.revision || !wasConnected || audioChanged) { desired = f; if (clock.ready) schedule(f, true) }
                 if (playPublishedHash != null && queue.firstOrNull()?.hash == playPublishedHash) { playPublishedHash = null; command("play") }
+                if (state.value.role == "host" && state.value.sharing && !state.value.busy && queue.any { it.hash !in available }) uploadMissingAudio()
             }
             "error" -> message(x.getString("error"))
         }
@@ -174,8 +177,9 @@ class SyncCoordinator(private val context: Context, val dao: LibraryDao, prefere
         val remote = state.value.queue.getOrNull(f.index) ?: run { p.pause(); p.clearMediaItems(); preparedHash = ""; return false }
         if (preparedHash == remote.hash) return true
         val local = state.value.library.find { it.hash == remote.hash }
-        val uri = if (local != null) local.uri else if (state.value.sharing) "${state.value.endpoint}/sessions/${state.value.code}/audio/${remote.hash}" else null
-        if (uri == null) { p.pause(); p.clearMediaItems(); preparedHash = ""; update { it.copy(missing = true, playing = false, message = "Missing MP3: ${remote.title}. Import the identical file or ask the host to share it.") }; return false }
+        val relayReady = state.value.sharing && (!state.value.audioManifestKnown || remote.hash in state.value.audioAvailable)
+        val uri = if (local != null) local.uri else if (relayReady) "${state.value.endpoint}/sessions/${state.value.code}/audio/${remote.hash}" else null
+        if (uri == null) { p.pause(); p.clearMediaItems(); preparedHash = ""; update { it.copy(index = f.index, missing = true, playing = false, audioError = "", message = if (it.sharing) "Waiting for the host to upload ${remote.title}. Playback will start automatically." else "Connected, but this song is not on this device. Ask the host to tap Share music with guest, or import the identical MP3.") }; return false }
         val metadata = MediaMetadata.Builder().setTitle(remote.title).setArtist(remote.artist).setAlbumTitle(remote.album).apply { local?.artPath?.let { setArtworkUri(Uri.fromFile(java.io.File(it))) } }.build()
         p.pause(); p.setMediaItem(MediaItem.Builder().setMediaId(remote.hash).setUri(uri).setMediaMetadata(metadata).build(), f.positionMs); p.prepare(); preparedHash = remote.hash
         update { it.copy(missing = false, index = f.index, audioError = "") }; return true
@@ -311,12 +315,13 @@ class SyncCoordinator(private val context: Context, val dao: LibraryDao, prefere
     fun deletePlaylist(p: SavedPlaylist) { if (!state.value.driving) scope.launch { dao.delete(p) } }
     fun uploadMissingAudio() {
         val s = state.value
-        if (s.driving || !s.sharing || s.role != "host" || !s.connected) return
+        if (s.busy || !s.sharing || s.role != "host" || !s.connected) return
         scope.launch {
             update { it.copy(busy = true) }
             try {
                 withContext(Dispatchers.IO) {
                     for (remote in s.queue.distinctBy { it.hash }) {
+                        if (remote.hash in s.audioAvailable) continue
                         val t = s.library.find { it.hash == remote.hash } ?: continue
                         val uri = Uri.parse(t.uri)
                         val size = context.contentResolver.openAssetFileDescriptor(uri, "r")?.use { it.length } ?: -1
@@ -331,7 +336,7 @@ class SyncCoordinator(private val context: Context, val dao: LibraryDao, prefere
                         withContext(Dispatchers.Main) { message("Uploaded ${t.title}") }
                     }
                 }
-                message("Audio relay ready. Guest can tap Retry audio if needed.")
+                message("Audio relay ready. The guest starts automatically.")
             } catch (e: Exception) { message(e.message ?: "Upload failed") }
             finally { update { it.copy(busy = false) } }
         }

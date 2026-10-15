@@ -75,19 +75,24 @@ test('guest authorization, clock timestamps and authenticated reconnect snapshot
   const after = await resumed.wait(x => x.type === 'state'); assert.deepEqual(after.frame, before.frame); assert.equal(after.cars.filter(x => x.online).length, 2);
 });
 test('audio opt-in, host-only upload, hash integrity, authenticated range streaming and revocation', async t => {
-  const { a, host, guest, url } = await setup(t);
+  const { a, b, host, guest, url } = await setup(t);
   const bytes = Buffer.from('fixture audio bytes for relay integrity'), hash = digest(bytes);
   a.send('playlist', { playlist: [track(hash)] }); await a.wait(x => x.type === 'state' && x.playlist.length === 1);
   const path = `${url}/sessions/${host.code}/audio/${hash}`;
   const put = async (who, data) => fetch(path, { method: 'PUT', headers: { Authorization: `Bearer ${who.token}` }, body: data });
   assert.equal((await put(host, bytes)).status, 403);
   a.send('settings', { sharing: true }); await a.wait(x => x.type === 'state' && x.sharing);
+  const waiting = await b.wait(x => x.type === 'state' && x.sharing); assert.deepEqual(waiting.audioAvailable, []);
   assert.equal((await put(guest, bytes)).status, 403); assert.equal((await put(host, Buffer.from('wrong'))).status, 400);
   assert.equal((await put(host, bytes)).status, 200); assert.equal((await fetch(path)).status, 401);
+  const ready = await b.wait(x => x.type === 'state' && x.audioAvailable?.includes(hash));
+  assert.equal(ready.frame.revision, waiting.frame.revision);
   const range = await fetch(path, { headers: { Authorization: `Bearer ${guest.token}`, Range: 'bytes=3-9' } }); assert.equal(range.status, 206); assert.equal(await range.text(), bytes.subarray(3, 10).toString());
   const invalid = await fetch(path, { headers: { Authorization: `Bearer ${guest.token}`, Range: 'bytes=100-200' } }); assert.equal(invalid.status, 416);
   a.messages = []; // Discard authentication snapshots, which also have sharing=false.
+  b.messages = [];
   a.send('settings', { sharing: false }); await a.wait(x => x.type === 'state' && !x.sharing);
+  const revoked = await b.wait(x => x.type === 'state' && !x.sharing); assert.deepEqual(revoked.audioAvailable, []);
   assert.equal((await fetch(path, { headers: { Authorization: `Bearer ${guest.token}` } })).status, 403);
 });
 test('session capacity, missing audio and malformed playlists produce clear errors', async t => {

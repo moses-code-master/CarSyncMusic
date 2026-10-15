@@ -31,7 +31,7 @@ export function createServer({ dataDir = process.env.DATA_DIR || './data', port 
   const fail = (res, status, error) => { res.writeHead(status, { 'Content-Type': 'application/json' }); res.end(JSON.stringify({ error })); };
   const send = (ws, x) => { if (ws.readyState === WebSocket.OPEN) ws.send(JSON.stringify(x)); };
   function snapshot(s) {
-    return { type: 'state', code: s.code, playlist: s.playlist, frame: s.frame, previous: s.previous, repeat: s.repeat, sharing: s.sharing, guestControls: s.guestControls, expiresAt: s.expiresAt, serverNow: now(), cars: s.members.map(m => ({ id: m.id, name: m.name, role: m.role, online: peers.has(m.id), ...(peers.get(m.id)?.status || {}) })) };
+    return { type: 'state', code: s.code, playlist: s.playlist, audioAvailable: s.sharing ? s.playlist.filter(t => existsSync(join(dataDir, `${s.code}-${t.hash}.mp3`))).map(t => t.hash) : [], frame: s.frame, previous: s.previous, repeat: s.repeat, sharing: s.sharing, guestControls: s.guestControls, expiresAt: s.expiresAt, serverNow: now(), cars: s.members.map(m => ({ id: m.id, name: m.name, role: m.role, online: peers.has(m.id), ...(peers.get(m.id)?.status || {}) })) };
   }
   const broadcast = s => s.members.forEach(m => { const p = peers.get(m.id); if (p) send(p.ws, snapshot(s)); });
   const broadcastCars = s => {

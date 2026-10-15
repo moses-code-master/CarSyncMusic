@@ -136,7 +136,7 @@ class PlaybackRuntimeTest {
             await("Guest reconnect playback failed") { guest.state.value.connected && guest.state.value.playing && guest.state.value.positionMs > 15000 }
         } finally { main { guest.leave(); guest.shutdown(); p.release() }; db.close(); main { sync.endSession() }; await("Host session cleanup") { sync.state.value.code.isBlank() } }
     }
-    @Test fun missingGuestFileStaysSilentUntilPermittedRelayIsAvailable() {
+    @Test fun guestWithoutLocalMusicStartsAutomaticallyAfterHostPermitsSharing() {
         main { sync.configure("http://10.0.2.2:8080", "Relay host"); sync.create() }
         await("Host connection failed") { sync.state.value.connected && sync.state.value.clockReady }
         main { sync.playTrack(track.hash) }; await("Host MP3 failed") { sync.state.value.playing }
@@ -153,8 +153,10 @@ class PlaybackRuntimeTest {
         try {
             await("Missing-file warning absent") { guest.state.value.missing }; assertFalse(guest.state.value.playing)
             main { sync.settings(sharing = true) }; await("Sharing not enabled") { sync.state.value.sharing }
-            main { sync.uploadMissingAudio() }; await("Upload did not complete") { sync.state.value.message.contains("Audio relay ready") }
-            main { guest.retryAudio() }; await("Relay MP3 did not decode/play") { guest.state.value.playing && guest.state.value.positionMs > 1000 }
+            await("Automatic upload did not complete") { sync.state.value.message.contains("Audio relay ready") }
+            await("Guest did not automatically decode/play relay MP3") { guest.state.value.playing && guest.state.value.positionMs > 1000 }
+            main { sync.command("pause") }; await("Relay guest pause failed") { !guest.state.value.playing }
+            main { sync.command("play") }; await("Relay guest resume failed") { guest.state.value.playing }
             main { sync.settings(sharing = false) }; await("Revocation did not stop guest") { guest.state.value.missing && !guest.state.value.playing }
         } finally { main { guest.leave(); guest.shutdown(); p.release() }; db.close(); main { sync.endSession() }; await("Host session cleanup") { sync.state.value.code.isBlank() } }
     }

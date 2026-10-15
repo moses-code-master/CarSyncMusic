@@ -260,6 +260,13 @@ private val pages = listOf("Home", "Music Library", "Playlists", "Create Session
 @Composable private fun NowPlaying(s: AppState, sync: SyncCoordinator) {
     val t = s.track
     if (t == null) { Title("Ready for the road", "Import MP3s, publish a playlist, then press play."); return }
+    if (s.role == "host" && !s.driving) {
+        if (!s.sharing) {
+            Text("Guest connected but silent? Share this playlist so the other device can stream it. Enable only for MP3s you have permission to share.", color = Muted)
+            LargeButton("Share music with guest", !s.busy) { sync.settings(sharing = true) }
+        } else Text(if (s.busy) "Sending music to the guest…" else "Audio sharing enabled · new playlist songs upload automatically", color = Accent)
+    }
+    if (s.role == "guest" && s.missing) Text(if (s.sharing) "Waiting for music from the host. Playback starts automatically when ready." else "Controls are connected. Ask the host to tap Share music with guest to hear this song.", color = Accent)
     BoxWithConstraints {
         val wide = maxWidth > 500.dp
         val art = s.library.find { it.hash == t.hash }?.artPath
