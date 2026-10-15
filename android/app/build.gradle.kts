@@ -16,7 +16,7 @@ android {
         val location = System.getenv("CARSYNC_KEYSTORE")
         if (location != null && file(location).exists()) { storeFile = file(location); storePassword = "android"; keyAlias = "androiddebugkey"; keyPassword = "android" }
     }
-    buildTypes { release { isMinifyEnabled = false } }
+    buildTypes { release { isMinifyEnabled = false; isDebuggable = false; signingConfig = signingConfigs.getByName("debug") } }
     packaging { resources.excludes += "/META-INF/{AL2.0,LGPL2.1}" }
 }
 dependencies {

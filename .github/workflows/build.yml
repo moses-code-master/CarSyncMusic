@@ -47,11 +47,11 @@ jobs:
         run: sdkmanager 'platforms;android-35' 'build-tools;35.0.0'
       - name: Compile APK and run clock tests
         working-directory: android
-        run: sh gradlew assembleDebug testDebugUnitTest lintDebug --no-daemon
+        run: sh gradlew assembleRelease testDebugUnitTest lintRelease --no-daemon
       - uses: actions/upload-artifact@v7
         with:
-          name: CarSyncMusic-debug-apk
-          path: android/app/build/outputs/apk/debug/app-debug.apk
+          name: CarSyncMusic-release-apk
+          path: android/app/build/outputs/apk/release/app-release.apk
           retention-days: 30
       - uses: actions/upload-artifact@v7
         if: always()
@@ -102,6 +102,12 @@ jobs:
           disable-animations: true
           working-directory: android
           script: |
+            sh gradlew assembleRelease --no-daemon
+            adb install app/build/outputs/apk/release/app-release.apk
+            adb shell am start -W -n app.carsync.music/.MainActivity
+            sleep 3
+            adb shell ps -A | grep app.carsync.music || adb shell ps | grep app.carsync.music
+            adb uninstall app.carsync.music
             result=0
             sh gradlew connectedDebugAndroidTest --no-daemon || result=$?
             mkdir -p ../runtime-results
