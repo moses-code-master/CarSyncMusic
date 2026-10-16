@@ -131,7 +131,7 @@ private val pages = listOf("Home", "Music Library", "Playlists", "Create Session
                         Text(CreatorBrand.PRODUCT, fontWeight = FontWeight.Bold, fontSize = 22.sp, maxLines = 1, overflow = TextOverflow.Ellipsis)
                         Text(CreatorBrand.SIGNATURE, color = Accent, fontSize = 12.sp)
                     }
-                    Text(if (s.connected) "● ${s.role.uppercase()} · ${s.code}" else if (s.role == "local") "LOCAL AUDIO" else "● OFFLINE", fontSize = 12.sp, color = if (s.connected) Accent else Muted)
+                    Text(if (s.connected) "● ${s.role.uppercase()} · ${s.code}" else if (s.role == "local") "LOCAL PLAYBACK" else "● OFFLINE", fontSize = 12.sp, color = if (s.connected) Accent else Muted)
                 }
                 Text(page, color = Muted, fontSize = 15.sp, modifier = Modifier.padding(top = 6.dp))
             }

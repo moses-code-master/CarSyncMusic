@@ -59,7 +59,8 @@ class VideoRuntimeTest {
         await("Local video did not render") { var frames = 0; main { frames = sync.renderingPlayer()?.videoDecoderCounters?.renderedOutputBufferCount ?: 0 }; sync.state.value.playing && frames > 2 }
         capture("video-player-portrait.png")
         val full = device.findObject(UiSelector().text("Fullscreen")); if (!full.exists()) androidx.test.uiautomator.UiScrollable(UiSelector().scrollable(true)).scrollTextIntoView("Fullscreen")
-        full.click(); Thread.sleep(900); capture("video-player-fullscreen.png"); device.pressBack(); Thread.sleep(600)
+        full.click(); await("Fullscreen did not rotate to landscape") { device.displayWidth > device.displayHeight }
+        Thread.sleep(900); capture("video-player-fullscreen.png"); device.pressBack(); Thread.sleep(600)
         main { sync.command("pause") }; await("Local video pause") { !sync.state.value.playing }
         main { sync.command("seek", 12000); sync.command("play") }; await("Local video seek/resume") { sync.state.value.playing && sync.state.value.positionMs > 12000 }
         main { sync.command("seek", 44000) }; await("Video playlist automatic advance") { sync.state.value.index == 1 && sync.state.value.playing }
