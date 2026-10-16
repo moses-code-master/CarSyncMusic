@@ -42,7 +42,7 @@ fun importTrack(context: Context, uri: Uri, copyToApp: Boolean = true): Track {
         val owned = File(directory, "$hash.mp3")
         if (copyToApp) { if (!owned.exists()) require(temporary.renameTo(owned)) { "Not enough space to save MP3" } else temporary.delete() }
         val playableUri = if (copyToApp) Uri.fromFile(owned) else uri
-        val name = if (uri.scheme == "content") context.contentResolver.query(uri, arrayOf(OpenableColumns.DISPLAY_NAME), null, null, null)?.use { if (it.moveToFirst()) it.getString(0) else null } else uri.lastPathSegment
+        val name = if (uri.scheme == "content") runCatching { context.contentResolver.query(uri, arrayOf(OpenableColumns.DISPLAY_NAME), null, null, null)?.use { if (it.moveToFirst()) it.getString(0) else null } }.getOrNull() else uri.lastPathSegment
         val meta = MediaMetadataRetriever()
         try {
             meta.setDataSource(context, playableUri)

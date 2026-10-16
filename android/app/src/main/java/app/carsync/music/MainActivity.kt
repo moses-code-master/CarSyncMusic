@@ -59,7 +59,16 @@ class MainActivity : ComponentActivity() {
     }
     override fun onStop() { controller?.let { MediaController.releaseFuture(it) }; controller = null; super.onStop() }
     override fun onNewIntent(intent: Intent) { super.onNewIntent(intent); acceptLink(intent) }
-    private fun acceptLink(intent: Intent) { intent.data?.let { sync.invitation(it) } }
+    private fun acceptLink(intent: Intent) {
+        if (intent.data?.scheme == "carsync") { sync.invitation(intent.data!!); return }
+        val uris = when (intent.action) {
+            Intent.ACTION_VIEW -> listOfNotNull(intent.data)
+            Intent.ACTION_SEND -> listOfNotNull(intent.getParcelableExtra<Uri>(Intent.EXTRA_STREAM))
+            Intent.ACTION_SEND_MULTIPLE -> intent.getParcelableArrayListExtra<Uri>(Intent.EXTRA_STREAM).orEmpty()
+            else -> emptyList()
+        }.filter { it.scheme == "content" || it.scheme == "file" }
+        if (uris.isNotEmpty()) sync.importFiles(uris)
+    }
 }
 
 private val Accent = Color(0xFFB4F36D)
@@ -84,6 +93,18 @@ private val pages = listOf("Home", "Music Library", "Playlists", "Create Session
     LaunchedEffect(s.invitationCode) { if (s.invitationCode.isNotBlank()) page = "Join Session" }
     val context = androidx.compose.ui.platform.LocalContext.current
     val import = rememberLauncherForActivityResult(ActivityResultContracts.OpenMultipleDocuments()) { sync.importFiles(it) }
+    val legacyImport = rememberLauncherForActivityResult(ActivityResultContracts.StartActivityForResult()) { result ->
+        if (result.resultCode == android.app.Activity.RESULT_OK) {
+            val data = result.data
+            val uris = data?.clipData?.let { clip -> (0 until clip.itemCount).map { clip.getItemAt(it).uri } } ?: listOfNotNull(data?.data)
+            sync.importFiles(uris)
+        }
+    }
+    val openImport = {
+        launchPickerSafely({ import.launch(arrayOf("audio/*")) }, {
+            legacyImport.launch(Intent(Intent.ACTION_GET_CONTENT).addCategory(Intent.CATEGORY_OPENABLE).setType("audio/*").putExtra(Intent.EXTRA_ALLOW_MULTIPLE, true).addFlags(Intent.FLAG_GRANT_READ_URI_PERMISSION))
+        }) { sync.message("No working file picker on this head unit. Use Scan phone, or open an MP3 in FileManager and choose Open with / Share → CarSync Music.") }
+    }
     val scanPermission = rememberLauncherForActivityResult(ActivityResultContracts.RequestPermission()) { granted -> if (granted) sync.scanPhone() else sync.message("Allow Music and audio access to scan your phone. Import files works without this permission.") }
     val scan = {
         val permission = if (Build.VERSION.SDK_INT >= 33) Manifest.permission.READ_MEDIA_AUDIO else Manifest.permission.READ_EXTERNAL_STORAGE
@@ -144,7 +165,7 @@ private val pages = listOf("Home", "Music Library", "Playlists", "Create Session
                         Title("Your music", "Tap any song to play. Scan your phone or import from a folder, USB or SD card.")
                         Row(Modifier.horizontalScroll(rememberScrollState()), horizontalArrangement = Arrangement.spacedBy(10.dp)) {
                             LargeButton("Scan phone", !s.busy) { scan() }
-                            LargeButton("Import files", !s.busy) { import.launch(arrayOf("audio/*")) }
+                            LargeButton("Import files", !s.busy) { openImport() }
                             LargeButton("Playlists") { page = "Playlists" }
                         }
                         OutlinedTextField(search, { search = it }, label = { Text("Search title, artist or album") }, modifier = Modifier.fillMaxWidth())
@@ -212,7 +233,7 @@ private val pages = listOf("Home", "Music Library", "Playlists", "Create Session
                         Text("Server: ${s.endpoint.ifBlank { "Configure in Settings" }}", color = Muted)
                         OutlinedTextField(joinCode, { joinCode = it.filter(Char::isDigit).take(6) }, label = { Text("Six-digit session code") }, modifier = Modifier.fillMaxWidth())
                         LargeButton("Join session", !s.busy && s.code.isBlank()) { sync.join(joinCode); page = "Now Playing" }
-                        LargeButton("Read QR from image") { qrImport.launch(arrayOf("image/*")) }
+                        LargeButton("Read QR from image") { launchPickerSafely({ qrImport.launch(arrayOf("image/*")) }) { sync.message("No working image picker. Enter the six-digit session code instead.") } }
                         if (endpoint != s.endpoint && endpoint.isNotBlank()) { Text("QR suggests server: $endpoint", color = Accent); LargeButton("Review in Settings") { page = "Settings" } }
                     }
                     "Now Playing" -> NowPlaying(s, sync)
@@ -241,7 +262,7 @@ private val pages = listOf("Home", "Music Library", "Playlists", "Create Session
                                 SettingToggle("Guest playback controls", s.guestControls, "Allow both cars to play, pause, skip and seek.") { sync.settings(guestControls = it) }
                                 SettingToggle("I have permission to share this audio", s.sharing, "Opt in only for audio you may lawfully share. MP3s are uploaded to your server, then streamed by the guest. Revoking removes relay files.") { sync.settings(sharing = it) }
                                 LargeButton("Upload current playlist to relay", s.sharing && !s.busy) { sync.uploadMissingAudio() }
-                                LargeButton("Export synchronization telemetry") { metricsExport.launch("carsync-${s.code}-metrics.csv") }
+                                LargeButton("Export synchronization telemetry") { launchPickerSafely({ metricsExport.launch("carsync-${s.code}-metrics.csv") }) { sync.message("This device has no working file picker for saving reports.") } }
                             }
                             if (s.code.isNotBlank()) {
                                 LargeButton("Reconnect now") { sync.resume() }

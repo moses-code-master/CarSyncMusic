@@ -302,13 +302,13 @@ class SyncCoordinator(private val context: Context, val dao: LibraryDao, prefere
     fun driving(v: Boolean) { prefs.edit().putBoolean("driving", v).apply(); update { it.copy(driving = v) } }
     fun latency(ms: Long) { prefs.edit().putLong("latency", ms.coerceIn(0, 2000)).apply(); update { it.copy(latencyMs = ms.coerceIn(0, 2000)) } }
     fun importFiles(uris: List<Uri>) {
-        if (state.value.driving) return
+        if (state.value.driving || uris.isEmpty()) return
         scope.launch {
-            update { it.copy(busy = true) }; var count = 0
+            update { it.copy(busy = true) }; var count = 0; var firstError: String? = null
             withContext(Dispatchers.IO) { for (uri in uris) try {
                 dao.insert(importTrack(context, uri)); count++
-            } catch (e: Exception) { withContext(Dispatchers.Main) { message("Import failed: ${e.message}") } } }
-            update { it.copy(busy = false, message = "Imported $count of ${uris.size} MP3 files.") }
+            } catch (e: Exception) { if (firstError == null) firstError = e.message ?: "Cannot read this file" } }
+            update { it.copy(busy = false, message = "Imported $count of ${uris.size} MP3 files." + (firstError?.let { error -> " Import failed: $error" } ?: "")) }
         }
     }
     fun savePlaylist(name: String, hashes: List<String>, id: Long = 0) { if (!state.value.driving && name.isNotBlank()) scope.launch { dao.save(SavedPlaylist(id, name.trim(), hashes.joinToString(","))); message("Playlist saved.") } }

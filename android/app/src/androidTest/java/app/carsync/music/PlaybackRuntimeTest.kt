@@ -54,6 +54,29 @@ class PlaybackRuntimeTest {
         await("Library did not load") { sync.state.value.library.any { it.hash == track.hash } }
     }
     @After fun cleanup() { main { sync.leave() }; scenario.close() }
+    @Test fun importWithoutSystemFilePickerShowsHelpInsteadOfCrashing() {
+        val device = UiDevice.getInstance(instrumentation)
+        val handlers = listOf(android.content.Intent.ACTION_OPEN_DOCUMENT, android.content.Intent.ACTION_GET_CONTENT).flatMap { action ->
+            context.packageManager.queryIntentActivities(android.content.Intent(action).addCategory(android.content.Intent.CATEGORY_OPENABLE).setType("audio/*"), 0).map { it.activityInfo.packageName }
+        }.filter { it != "android" && it != context.packageName }.toSet()
+        assertTrue("Emulator has no picker to disable", handlers.isNotEmpty())
+        try {
+            handlers.forEach { device.executeShellCommand("pm disable-user --user 0 $it") }
+            device.findObject(UiSelector().text("Library")).click()
+            val button = device.findObject(UiSelector().text("Import files")); assertTrue(button.waitForExists(5000)); button.click()
+            await("Missing picker crashed or did not show help") { sync.state.value.message.contains("No working file picker") }
+            assertEquals(androidx.lifecycle.Lifecycle.State.RESUMED, scenario.state)
+            main { sync.importFiles(listOf(Uri.parse("content://missing.provider/unreadable.mp3"))) }
+            await("Bad provider error was hidden") { !sync.state.value.busy && sync.state.value.message.contains("Import failed:") }
+        } finally { handlers.forEach { device.executeShellCommand("pm enable --user 0 $it") } }
+    }
+    @Test fun pickerLaunchFallsBackAfterProviderFailure() {
+        var fallbackOpened = false; var helpShown = false
+        launchPickerSafely({ throw android.content.ActivityNotFoundException("No DocumentsUI") }, { fallbackOpened = true }) { helpShown = true }
+        assertTrue(fallbackOpened); assertFalse(helpShown)
+        launchPickerSafely({ throw SecurityException("OEM blocked picker") }, { throw android.content.ActivityNotFoundException() }) { helpShown = true }
+        assertTrue(helpShown)
+    }
     @Test fun localMp3ActuallyDecodesAdvancesPausesSeeksAndResumes() {
         assertTrue(File(Uri.parse(track.uri).path!!).exists())
         main { sync.playTrack(track.hash) }
