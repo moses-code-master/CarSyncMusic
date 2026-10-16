@@ -7,6 +7,7 @@ import android.content.pm.ActivityInfo
 import android.os.Build
 import android.view.LayoutInflater
 import androidx.activity.compose.rememberLauncherForActivityResult
+import androidx.activity.compose.LocalActivity
 import androidx.activity.result.contract.ActivityResultContracts
 import androidx.compose.foundation.*
 import androidx.compose.foundation.layout.*
@@ -138,7 +139,7 @@ private val VideoAccent = Color(0xFFB4F36D)
     }
     if (s.missing) Text(s.message, color = Color(0xFFFFB19F))
     if (fullscreen) Dialog(onDismissRequest = { fullscreen = false }, properties = DialogProperties(usePlatformDefaultWidth = false, decorFitsSystemWindows = false)) {
-        val activity = LocalContext.current as? Activity
+        val activity = LocalActivity.current
         val window = (LocalView.current.parent as? DialogWindowProvider)?.window
         DisposableEffect(activity, window) {
             val previous = activity?.requestedOrientation
