@@ -40,6 +40,12 @@ export function validatePlaylist(list) {
   if (!Array.isArray(list) || list.length > 500) throw Error('Playlist must contain at most 500 tracks');
   return list.map(t => {
     if (!/^[a-f0-9]{64}$/.test(t.hash) || !Number.isFinite(t.durationMs) || t.durationMs <= 0 || t.durationMs > 86400000) throw Error('Invalid track');
-    return { hash: t.hash, title: String(t.title || 'Untitled').slice(0, 200), artist: String(t.artist || 'Unknown artist').slice(0, 200), album: String(t.album || '').slice(0, 200), durationMs: t.durationMs };
+    const mediaType = t.mediaType ?? 'audio';
+    if (!['audio', 'video'].includes(mediaType)) throw Error('Invalid media type');
+    const sizeBytes = t.sizeBytes ?? 0, width = t.width ?? 0, height = t.height ?? 0;
+    if (![sizeBytes,width,height].every(Number.isSafeInteger) || sizeBytes < 0 || sizeBytes > 4 * 1024 ** 3 || width < 0 || height < 0 || width > 16384 || height > 16384) throw Error('Invalid media metadata');
+    const mimeType = String(t.mimeType || (mediaType === 'video' ? 'video/mp4' : 'audio/mpeg')).slice(0, 100);
+    if (!mimeType.startsWith(mediaType + '/')) throw Error('Invalid media MIME type');
+    return { hash: t.hash, title: String(t.title || 'Untitled').slice(0, 200), artist: String(t.artist || 'Unknown artist').slice(0, 200), album: String(t.album || '').slice(0, 200), durationMs: t.durationMs, mediaType, mimeType, sizeBytes, width, height };
   });
 }

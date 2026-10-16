@@ -5,7 +5,7 @@ import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { WebSocket } from 'ws';
 import { createServer } from '../src/server.mjs';
-import { digest, schedule, position, effective } from '../src/model.mjs';
+import { digest, schedule, position, effective, validatePlaylist } from '../src/model.mjs';
 
 const track = (hash = 'a'.repeat(64)) => ({ hash, title: 'Test track', artist: 'Test artist', album: 'Tests', durationMs: 60000 });
 test('rapid select/play and seek/play retain the pending track and requested position', () => {
@@ -27,13 +27,13 @@ class Peer {
   }
   send(type, payload = {}) { this.ws.send(JSON.stringify({ type, id: crypto.randomUUID(), ...payload })); }
 }
-async function setup(t) {
+async function setup(t, video = false) {
   const dir = mkdtempSync(join(tmpdir(), 'carsync-')), app = createServer({ dataDir: dir, port: 0 }); await app.listen();
   t.after(async () => { await app.close(); rmSync(dir, { recursive: true, force: true }); });
   const url = `http://127.0.0.1:${app.server.address().port}`;
   const post = async path => { const r = await fetch(url + path, { method: 'POST', body: '{"name":"Test car"}' }); return { status: r.status, ...(await r.json()) }; };
   const host = await post('/sessions'), guest = await post(`/sessions/${host.code}/join`);
-  const a = new Peer(url.replace('http', 'ws') + '/ws', host), b = new Peer(url.replace('http', 'ws') + '/ws', guest);
+  const a = new Peer(url.replace('http', 'ws') + '/ws', { ...host, mediaCapabilities: video ? ['audio','video'] : ['audio'] }), b = new Peer(url.replace('http', 'ws') + '/ws', { ...guest, mediaCapabilities: video ? ['audio','video'] : ['audio'] });
   await Promise.all([a.ready, b.ready]); await a.wait(x => x.type === 'state'); await b.wait(x => x.type === 'state');
   return { app, url, host, guest, a, b, post };
 }
@@ -128,4 +128,28 @@ test('backend restart retains identities and playlist but safely pauses the reco
   url = `http://127.0.0.1:${app.server.address().port}`;
   const response = await fetch(`${url}/sessions/${host.code}`, { headers: { Authorization: `Bearer ${host.token}` } }); const s = await response.json();
   assert.equal(response.status, 200); assert.equal(s.playlist[0].hash, track().hash); assert.equal(s.frame.playing, false); assert.equal(s.frame.revision, 2);
+});
+
+test('video metadata, shared controls, missing-file relay rejection and legacy client protection', async t => {
+  const {a,b,host,guest,url} = await setup(t,true);
+  const video = { ...track(), mediaType:'video', mimeType:'video/mp4', sizeBytes:924408, width:320, height:180 };
+  a.send('playlist',{playlist:[video,{...video,hash:'b'.repeat(64),mimeType:'video/x-matroska'}]});
+  const sa=await a.wait(x=>x.type==='state'&&x.playlist.length===2), sb=await b.wait(x=>x.type==='state'&&x.playlist.length===2);
+  assert.equal(sa.mediaProtocol,2); assert.deepEqual(sa.playlist,sb.playlist); assert.equal(sa.playlist[0].mediaType,'video');
+  for (const action of [{kind:'play'},{kind:'pause'},{kind:'seek',positionMs:15000},{kind:'play'},{kind:'next'}]) {
+    a.send('control',{action}); const nextA=await a.wait(x=>x.type==='state'&&x.frame.revision>sa.frame.revision); const nextB=await b.wait(x=>x.type==='state'&&x.frame.revision===nextA.frame.revision); assert.deepEqual(nextA.frame,nextB.frame); sa.frame=nextA.frame;
+  }
+  a.send('settings',{sharing:true}); await a.wait(x=>x.type==='state'&&x.sharing);
+  assert.equal((await fetch(`${url}/sessions/${host.code}/audio/${video.hash}`,{method:'PUT',headers:{Authorization:`Bearer ${host.token}`},body:Buffer.from('video')})).status,415);
+  assert.equal((await fetch(`${url}/sessions/${host.code}/audio/${video.hash}`,{headers:{Authorization:`Bearer ${guest.token}`}})).status,415);
+  const legacy=new WebSocket(url.replace('http','ws')+'/ws');
+  const closed=new Promise(resolve=>legacy.on('close',(code,reason)=>resolve({code,reason:reason.toString()})));
+  legacy.on('open',()=>legacy.send(JSON.stringify({type:'auth',...guest})));
+  const rejection=await closed; assert.equal(rejection.code,4003); assert.match(rejection.reason,/1.5/);
+});
+test('media validation defaults legacy songs to audio and rejects invalid video metadata',()=>{
+  assert.equal(validatePlaylist([track()])[0].mediaType,'audio');
+  assert.throws(()=>validatePlaylist([{...track(),mediaType:'executable'}]),/media type/);
+  assert.throws(()=>validatePlaylist([{...track(),mediaType:'video',mimeType:'audio/mpeg'}]),/MIME/);
+  assert.throws(()=>validatePlaylist([{...track(),mediaType:'video',width:-1}]),/metadata/);
 });

@@ -7,6 +7,10 @@ Contact: **+254 740 636 336** · [GitHub: moses-code-master](https://github.com/
 
 Native Kotlin/Compose Android music app plus a self-hosted Node.js/WebSocket relay. The app plays ordinary MP3 files through each head unit's speakers, without Google Play Services or paid music subscriptions. Requires Android 6.0 or newer, third-party APK support, and network access.
 
+## Video upgrade under review
+
+[CarSync Music & Video 1.5.0 — by Brayo](docs/VIDEO-GUIDE.md) adds synchronized local videos on a development branch. See the guide for video imports, two-screen setup, safety controls and known limitations. It is not an official published release; the download below remains 1.4.0.
+
 ## Your live cloud setup
 
 - Public source: [moses-code-master/CarSyncMusic](https://github.com/moses-code-master/CarSyncMusic)
@@ -93,3 +97,4 @@ Read `docs/ARCHITECTURE.md`, `docs/TESTING.md`, and `docs/VALIDATION.md` for the
 ## Source references
 
 Android background-playback architecture follows [MediaSessionService guidance](https://developer.android.com/media/media3/session/background-playback). Compose dependency alignment follows the [official BOM guide](https://developer.android.com/develop/ui/compose/bom). Build compatibility: [AGP 8.9 release notes](https://developer.android.com/build/releases/agp-8-9-0-release-notes).
+

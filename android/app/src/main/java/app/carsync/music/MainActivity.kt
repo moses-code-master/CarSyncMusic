@@ -57,7 +57,7 @@ class MainActivity : ComponentActivity() {
         controller = future
         future.addListener({ try { future.get() } catch (e: Exception) { sync.message("Audio service could not start: ${e.cause?.message ?: e.message}") } }, ContextCompat.getMainExecutor(this))
     }
-    override fun onStop() { controller?.let { MediaController.releaseFuture(it) }; controller = null; super.onStop() }
+    override fun onStop() { sync.revokeParked(); controller?.let { MediaController.releaseFuture(it) }; controller = null; super.onStop() }
     override fun onNewIntent(intent: Intent) { super.onNewIntent(intent); acceptLink(intent) }
     private fun acceptLink(intent: Intent) {
         if (intent.data?.scheme == "carsync") { sync.invitation(intent.data!!); return }
@@ -67,7 +67,7 @@ class MainActivity : ComponentActivity() {
             Intent.ACTION_SEND_MULTIPLE -> intent.getParcelableArrayListExtra<Uri>(Intent.EXTRA_STREAM).orEmpty()
             else -> emptyList()
         }.filter { it.scheme == "content" || it.scheme == "file" }
-        if (uris.isNotEmpty()) sync.importFiles(uris)
+        if (uris.isNotEmpty()) uris.groupBy { if (intent.type?.startsWith("video/") == true || isVideoUri(this, it)) "video" else "audio" }.forEach { (kind, files) -> sync.importFiles(files, kind) }
     }
 }
 
@@ -140,8 +140,9 @@ private val pages = listOf("Home", "Music Library", "Playlists", "Create Session
                 if (s.busy) LinearProgressIndicator(Modifier.fillMaxWidth())
                 Text(s.message, color = if (s.audioError.isNotBlank()) Color(0xFFFFB19F) else Muted, fontSize = 13.sp, maxLines = 3, modifier = Modifier.padding(horizontal = 16.dp, vertical = 8.dp))
                 NavigationBar(containerColor = Color(0xFF10171F)) {
-                    val nav = listOf("Home" to Icons.Default.Home, "Music Library" to Icons.Default.List, "Now Playing" to Icons.Default.PlayArrow, "Create Session" to Icons.Default.Share, "Settings" to Icons.Default.Settings)
-                    nav.forEachIndexed { i, (target, icon) -> NavigationBarItem(selected = page == target || (i == 3 && page in listOf("Join Session", "Connected Cars")) || (i == 1 && page == "Playlists") || (i == 4 && page in listOf("About", "License")), onClick = { page = target }, icon = { Icon(icon, target) }, label = { Text(listOf("Home", "Library", "Player", "Session", "Settings")[i], fontSize = 12.sp) }) }
+                    val nav = listOf("Home" to Icons.Default.Home, "Music Library" to Icons.Default.List, "Videos" to Icons.Default.PlayArrow, "Now Playing" to Icons.Default.PlayArrow, "Create Session" to Icons.Default.Share, "Settings" to Icons.Default.Settings)
+                    val labels = mapOf("Home" to "Home", "Music Library" to "Library", "Videos" to "Videos", "Now Playing" to "Player", "Create Session" to "Session", "Settings" to "Settings")
+                    nav.forEach { (target, icon) -> NavigationBarItem(selected = page == target || (target == "Create Session" && page in listOf("Join Session", "Connected Cars")) || (target == "Music Library" && page == "Playlists") || (target == "Settings" && page in listOf("About", "License")), onClick = { page = target }, icon = { if (target == "Videos") Icon(painterResource(R.drawable.ic_video), target) else Icon(icon, target) }, label = { Text(labels.getValue(target), fontSize = 10.sp, maxLines = 1) }) }
                 }
             }
         }) { insets ->
@@ -152,17 +153,18 @@ private val pages = listOf("Home", "Music Library", "Playlists", "Create Session
                         Card(colors = CardDefaults.cardColors(containerColor = Color(0xFF243B28)), shape = RoundedCornerShape(28.dp)) { Column(Modifier.padding(24.dp), verticalArrangement = Arrangement.spacedBy(12.dp)) {
                             Text("YOUR ROAD. YOUR SOUND.", color = Accent, fontSize = 12.sp, fontWeight = FontWeight.Bold)
                             Text(CreatorBrand.WELCOME_CREDIT, color = Accent, fontSize = 16.sp, fontWeight = FontWeight.Medium)
-                            Text("Good music.\nShared miles.", fontSize = 38.sp, fontWeight = FontWeight.Bold)
+                            Text("Good music.\nShared miles.", fontSize = 38.sp, lineHeight = 44.sp, fontWeight = FontWeight.Bold)
                             Text("Play your phone’s MP3s instantly. Connect another car when you’re ready.", color = Color(0xFFCEDACD), fontSize = 18.sp)
                             LargeButton("Find music on this phone", !s.busy) { scan(); page = "Music Library" }
                         } }
                         Row(Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.spacedBy(12.dp)) {
-                            Stat("LIBRARY", "${s.library.size} tracks", Modifier.weight(1f)); Stat("SESSION", if (s.code.isBlank()) "Ready to connect" else s.code, Modifier.weight(1f))
+                            Stat("LIBRARY", "${s.library.count { it.mediaType == "audio" }} tracks", Modifier.weight(1f)); Stat("SESSION", if (s.code.isBlank()) "Ready to connect" else s.code, Modifier.weight(1f))
                         }
                         LargeButton("Create a listening session", enabled = !s.busy) { page = "Create Session" }
                         LargeButton("Join the other car") { page = "Join Session" }
                         LargeButton("Open music library") { page = "Music Library" }
-                        if (s.library.isNotEmpty() && s.track == null) s.library.take(4).forEach { track -> TrackRow(track, false, { sync.playTrack(track.hash); page = "Now Playing" }, {}) }
+                        LargeButton("Open videos · parked viewing") { page = "Videos" }
+                        if (s.library.isNotEmpty() && s.track == null) s.library.filter { it.mediaType == "audio" }.take(4).forEach { track -> TrackRow(track, false, { sync.playTrack(track.hash); page = "Now Playing" }, {}) }
                         if (s.track != null) NowPlaying(s, sync)
                     }
                     "Music Library" -> {
@@ -174,10 +176,10 @@ private val pages = listOf("Home", "Music Library", "Playlists", "Create Session
                         }
                         OutlinedTextField(search, { search = it }, label = { Text("Search title, artist or album") }, modifier = Modifier.fillMaxWidth())
                         Row(horizontalArrangement = Arrangement.spacedBy(10.dp)) {
-                            LargeButton("Select all") { selected = s.library.map { it.hash } }
+                            LargeButton("Select all") { selected = s.library.filter { it.mediaType == "audio" }.map { it.hash } }
                             LargeButton("Clear") { selected = emptyList() }
                         }
-                        LazyColumn(Modifier.fillMaxWidth().height(360.dp), verticalArrangement = Arrangement.spacedBy(10.dp)) { items(s.library.filter { "${it.title} ${it.artist} ${it.album}".contains(search, true) }, key = { it.hash }) { t ->
+                        LazyColumn(Modifier.fillMaxWidth().height(360.dp), verticalArrangement = Arrangement.spacedBy(10.dp)) { items(s.library.filter { it.mediaType == "audio" && "${it.title} ${it.artist} ${it.album}".contains(search, true) }, key = { it.hash }) { t ->
                             TrackRow(t, t.hash in selected, { sync.playTrack(t.hash); page = "Now Playing" }, { selected = if (t.hash in selected) selected - t.hash else selected + t.hash })
                         } }
                         Text("${selected.size} selected · selection order becomes playlist order", color = Accent)
@@ -188,7 +190,7 @@ private val pages = listOf("Home", "Music Library", "Playlists", "Create Session
                     }
                     "Playlists" -> {
                         Title("Road trip playlists", "Save, rename, reorder or publish. Publishing resets playback to the first track.")
-                        s.playlists.forEach { p ->
+                        s.playlists.filter { it.mediaType == "audio" }.forEach { p ->
                             Card(Modifier.fillMaxWidth()) { Column(Modifier.padding(16.dp), verticalArrangement = Arrangement.spacedBy(8.dp)) {
                                 Text(p.name, fontSize = 24.sp, fontWeight = FontWeight.Bold)
                                 val hashes = p.hashes.split(',').filter { it.isNotBlank() }
@@ -240,6 +242,7 @@ private val pages = listOf("Home", "Music Library", "Playlists", "Create Session
                         LargeButton("Read QR from image") { launchPickerSafely({ qrImport.launch(arrayOf("image/*")) }) { sync.message("No working image picker. Enter the six-digit session code instead.") } }
                         if (endpoint != s.endpoint && endpoint.isNotBlank()) { Text("QR suggests server: $endpoint", color = Accent); LargeButton("Review in Settings") { page = "Settings" } }
                     }
+                    "Videos" -> VideoLibraryScreen(s, sync) { page = "Now Playing" }
                     "Now Playing" -> NowPlaying(s, sync)
                     "Connected Cars" -> {
                         Title("Travelling together", "Drift is measured against the server timeline; it does not measure speaker or Bluetooth delay.")
@@ -288,14 +291,15 @@ private val pages = listOf("Home", "Music Library", "Playlists", "Create Session
 @Composable private fun NowPlaying(s: AppState, sync: SyncCoordinator) {
     val t = s.track
     if (t == null) { Title("Ready for the road", "Import MP3s, publish a playlist, then press play."); return }
-    if (s.role == "host" && !s.driving) {
+    if (s.role == "host" && !s.driving && t.mediaType == "audio") {
         if (!s.sharing) {
             Text("Guest connected but silent? Share this playlist so the other device can stream it. Enable only for MP3s you have permission to share.", color = Muted)
             LargeButton("Share music with guest", !s.busy) { sync.settings(sharing = true) }
         } else Text(if (s.busy) "Sending music to the guest…" else "Audio sharing enabled · new playlist songs upload automatically", color = Accent)
     }
-    if (s.role == "guest" && s.missing) Text(if (s.sharing) "Waiting for music from the host. Playback starts automatically when ready." else "Controls are connected. Ask the host to tap Share music with guest to hear this song.", color = Accent)
-    BoxWithConstraints {
+    if (s.role == "guest" && s.missing) Text(if (t.mediaType == "video") s.message else if (s.sharing) "Waiting for music from the host. Playback starts automatically when ready." else "Controls are connected. Ask the host to tap Share music with guest to hear this song.", color = Accent)
+    if (t.mediaType == "video") { VideoPanel(s, sync); PlaybackControls(s, sync) }
+    else BoxWithConstraints {
         val wide = maxWidth > 500.dp
         val art = s.library.find { it.hash == t.hash }?.artPath
         if (wide) Row(horizontalArrangement = Arrangement.spacedBy(24.dp)) { Artwork(art, Modifier.size(140.dp)); Column(Modifier.weight(1f)) { PlaybackControls(s, sync, compact = true) } }
@@ -334,7 +338,7 @@ private val pages = listOf("Home", "Music Library", "Playlists", "Create Session
     if (s.audioError.isNotBlank()) Text(s.audioError, color = Color(0xFFFFB19F))
     Text(if (s.role == "local") "On this device · no internet needed" else if (s.clockReady) "Player drift: ${s.driftMs?.let { "$it ms" } ?: "Measuring"} · RTT ${s.rttMs} ms" else "Matching clocks… playback will start when ready", color = Muted)
 }
-@Composable private fun Artwork(path: String?, modifier: Modifier, thumbnail: Boolean = false) {
+@Composable internal fun Artwork(path: String?, modifier: Modifier, thumbnail: Boolean = false) {
     val bitmap = remember(path) { path?.let {
         val bounds = BitmapFactory.Options().apply { inJustDecodeBounds = true }; BitmapFactory.decodeFile(it, bounds)
         val options = BitmapFactory.Options().apply { inSampleSize = (maxOf(bounds.outWidth, bounds.outHeight) / if (thumbnail) 96 else 512).coerceAtLeast(1) }
