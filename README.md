@@ -5,7 +5,7 @@ Native Kotlin/Compose Android music app plus a self-hosted Node.js/WebSocket rel
 ## Your live cloud setup
 
 - Public source: [moses-code-master/CarSyncMusic](https://github.com/moses-code-master/CarSyncMusic)
-- APK: [v1.3.0 test release](https://github.com/moses-code-master/CarSyncMusic/releases/tag/v1.3.0)
+- APK: [v1.3.1 test release](https://github.com/moses-code-master/CarSyncMusic/releases/tag/v1.3.1)
 - Server address prefilled in Settings on BOTH cars: `https://carsync-music.onrender.com`
 - [Server health check](https://carsync-music.onrender.com/health)
 
@@ -27,7 +27,7 @@ Local-only playback: open Library and tap a song without joining a session. Volu
 
 ## Install on head units
 
-When upgrading from v1.0.0, uninstall the old app first because its signing key differs; this clears its saved library and session. Then install v1.3.0 and scan/import music again. Future GitHub builds use a persistent private test signing key. Copy `CarSyncMusic.apk` to USB or internal storage, open it with the head unit file manager, and allow installation from that file manager when prompted. The published APK uses a non-debuggable release build, signed with the persistent private test key. For public distribution build and sign your own release APK with a private keystore. Do not install while driving.
+When upgrading from v1.0.0, uninstall the old app first because its signing key differs; this clears its saved library and session. Then install v1.3.1 and scan/import music again. Future GitHub builds use a persistent private test signing key. Copy `CarSyncMusic.apk` to USB or internal storage, open it with the head unit file manager, and allow installation from that file manager when prompted. The published APK uses a non-debuggable release build, signed with the persistent private test key. For public distribution build and sign your own release APK with a private keystore. Do not install while driving.
 
 For USB debugging, `adb install -r CarSyncMusic-debug.apk`. Allow notification permission on Android 13+ to see media controls. Some manufacturers require allowing background activity or disabling battery restrictions for CarSync. Ordinary Android head units are supported; Android Auto projection / certified Android Automotive app integration is outside this project.
 
@@ -39,6 +39,14 @@ For USB debugging, `adb install -r CarSyncMusic-debug.apk`. Allow notification p
 - The APK is universal and includes ARM 32-bit, ARM 64-bit, x86 and x86_64 native libraries. If installation still fails, record the exact Android version and installer message; USB debugging can provide the precise error with `adb install -r CarSyncMusic.apk`.
 
 For Xiaomi/Redmi phones: search Settings for “Install unknown apps”, select the browser or File Manager used to open the APK, and permit installation from that app. Menu locations differ by MIUI/HyperOS version; see [Xiaomi's official instructions](https://www.mi.com/global/support/faq/details/KA-06974/). A Redmi 12 is newer than the app's minimum requirement; “App not installed” on that model does not establish an Android-version problem.
+
+## Importing on aftermarket head units
+
+Some head units lack a working Android document picker even when they report a recent Android version. Version 1.3.1 tries the document picker, falls back to a compatible file manager, and shows help instead of crashing if neither can open.
+
+Use Library → Scan phone to discover MP3s already indexed on internal storage. For USB/SD music, open the head unit's FileManager, select an MP3, and choose Open with / Share → CarSync Music. FileManager must grant read access; inaccessible files are reported without hiding the error. Imported music is copied into app storage. QR image import and report export also handle unavailable pickers.
+
+A generic “CarSync Music has stopped” dialog does not identify the underlying exception. If a device still closes after selecting a particular song, record whether the picker opened and which file was selected; obtain its Android crash log if possible.
 
 ## Build an APK
 
@@ -80,6 +88,7 @@ Read `docs/ARCHITECTURE.md`, `docs/TESTING.md`, and `docs/VALIDATION.md` for the
 ## Source references
 
 Android background-playback architecture follows [MediaSessionService guidance](https://developer.android.com/media/media3/session/background-playback). Compose dependency alignment follows the [official BOM guide](https://developer.android.com/develop/ui/compose/bom). Build compatibility: [AGP 8.9 release notes](https://developer.android.com/build/releases/agp-8-9-0-release-notes).
+
 
 
 
