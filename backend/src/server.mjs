@@ -31,9 +31,13 @@ export function createServer({ dataDir = process.env.DATA_DIR || './data', port 
   const fail = (res, status, error) => { res.writeHead(status, { 'Content-Type': 'application/json' }); res.end(JSON.stringify({ error })); };
   const send = (ws, x) => { if (ws.readyState === WebSocket.OPEN) ws.send(JSON.stringify(x)); };
   function snapshot(s) {
-    return { type: 'state', code: s.code, playlist: s.playlist, audioAvailable: s.sharing ? s.playlist.filter(t => existsSync(join(dataDir, `${s.code}-${t.hash}.mp3`))).map(t => t.hash) : [], frame: s.frame, previous: s.previous, repeat: s.repeat, sharing: s.sharing, guestControls: s.guestControls, expiresAt: s.expiresAt, serverNow: now(), cars: s.members.map(m => ({ id: m.id, name: m.name, role: m.role, online: peers.has(m.id), ...(peers.get(m.id)?.status || {}) })) };
+    return { type: 'state', mediaProtocol: 2, code: s.code, playlist: s.playlist, audioAvailable: s.sharing ? s.playlist.filter(t => t.mediaType !== 'video' && existsSync(join(dataDir, `${s.code}-${t.hash}.mp3`))).map(t => t.hash) : [], frame: s.frame, previous: s.previous, repeat: s.repeat, sharing: s.sharing, guestControls: s.guestControls, expiresAt: s.expiresAt, serverNow: now(), cars: s.members.map(m => ({ id: m.id, name: m.name, role: m.role, online: peers.has(m.id), ...(peers.get(m.id)?.status || {}) })) };
   }
-  const broadcast = s => s.members.forEach(m => { const p = peers.get(m.id); if (p) send(p.ws, snapshot(s)); });
+  const broadcast = s => s.members.forEach(m => {
+    const p = peers.get(m.id); if (!p) return;
+    if (s.playlist.some(t => t.mediaType === 'video') && !p.video) { p.ws.close(4003, 'Video sessions require CarSync 1.5+. Update both devices.'); return; }
+    send(p.ws, snapshot(s));
+  });
   const broadcastCars = s => {
     const msg = { type: 'cars', cars: snapshot(s).cars, serverNow: now() };
     s.members.forEach(m => { const p = peers.get(m.id); if (p) send(p.ws, msg); });
@@ -92,6 +96,7 @@ export function createServer({ dataDir = process.env.DATA_DIR || './data', port 
       if (route === 'audio' && hash) {
         if (!s.sharing) return fail(res, 403, 'Host has not permitted audio sharing');
         if (!s.playlist.some(t => t.hash === hash)) return fail(res, 404, 'Track is not in this playlist');
+        if (s.playlist.find(t => t.hash === hash)?.mediaType === 'video') return fail(res, 415, 'Video relay is disabled. Import identical local video files on both devices.');
         const file = join(dataDir, `${c}-${hash}.mp3`);
         if (req.method === 'PUT' && member.role === 'host') {
           const length = Number(req.headers['content-length']);
@@ -138,7 +143,7 @@ export function createServer({ dataDir = process.env.DATA_DIR || './data', port 
           const s = sessions.get(b.code), member = s?.members.find(m => m.tokenHash === digest(b.token));
           if (!member || s.expiresAt < now()) { ws.close(4003, 'Invalid or expired session'); return; }
           context = { s, member }; clearTimeout(deadline);
-          peers.get(member.id)?.ws.close(4002, 'Another connection resumed this car'); peers.set(member.id, { ws }); metric(s, member, 'online'); broadcast(s); return;
+          peers.get(member.id)?.ws.close(4002, 'Another connection resumed this car'); peers.set(member.id, { ws, video: Array.isArray(b.mediaCapabilities) && b.mediaCapabilities.includes('video') }); metric(s, member, 'online'); broadcast(s); return;
         }
         const { s, member } = context;
         if (s.expiresAt < now() || !sessions.has(s.code)) { ws.close(4001, 'Session expired'); return; }

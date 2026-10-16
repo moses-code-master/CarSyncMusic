@@ -6,18 +6,24 @@
     <uses-permission android:name="android.permission.POST_NOTIFICATIONS" />
     <uses-permission android:name="android.permission.WAKE_LOCK" />
     <uses-permission android:name="android.permission.READ_MEDIA_AUDIO" />
+    <uses-permission android:name="android.permission.READ_MEDIA_VIDEO" />
     <uses-permission android:name="android.permission.MODIFY_AUDIO_SETTINGS" />
     <uses-permission android:name="android.permission.READ_EXTERNAL_STORAGE" android:maxSdkVersion="32" />
     <queries>
         <intent><action android:name="android.intent.action.OPEN_DOCUMENT" /><category android:name="android.intent.category.OPENABLE" /><data android:mimeType="audio/*" /></intent>
         <intent><action android:name="android.intent.action.GET_CONTENT" /><category android:name="android.intent.category.OPENABLE" /><data android:mimeType="audio/*" /></intent>
+        <intent><action android:name="android.intent.action.OPEN_DOCUMENT" /><category android:name="android.intent.category.OPENABLE" /><data android:mimeType="video/*" /></intent>
+        <intent><action android:name="android.intent.action.GET_CONTENT" /><category android:name="android.intent.category.OPENABLE" /><data android:mimeType="video/*" /></intent>
     </queries>
     <application android:name=".CarSyncApp" android:theme="@style/AppTheme" android:label="CarSync Music" android:icon="@drawable/ic_carsync" android:allowBackup="false" android:usesCleartextTraffic="true" android:supportsRtl="true">
+        <uses-library android:name="android.car" android:required="false" />
         <activity android:name=".MainActivity" android:exported="true" android:configChanges="keyboardHidden|orientation|screenSize">
             <intent-filter><action android:name="android.intent.action.MAIN" /><category android:name="android.intent.category.LAUNCHER" /></intent-filter>
             <intent-filter android:autoVerify="false"><action android:name="android.intent.action.VIEW" /><category android:name="android.intent.category.DEFAULT" /><category android:name="android.intent.category.BROWSABLE" /><data android:scheme="carsync" android:host="join" /></intent-filter>
             <intent-filter><action android:name="android.intent.action.VIEW" /><category android:name="android.intent.category.DEFAULT" /><data android:scheme="content" /><data android:scheme="file" /><data android:mimeType="audio/*" /></intent-filter>
             <intent-filter><action android:name="android.intent.action.SEND" /><action android:name="android.intent.action.SEND_MULTIPLE" /><category android:name="android.intent.category.DEFAULT" /><data android:mimeType="audio/*" /></intent-filter>
+            <intent-filter><action android:name="android.intent.action.VIEW" /><category android:name="android.intent.category.DEFAULT" /><data android:scheme="content" /><data android:scheme="file" /><data android:mimeType="video/*" /></intent-filter>
+            <intent-filter><action android:name="android.intent.action.SEND" /><action android:name="android.intent.action.SEND_MULTIPLE" /><category android:name="android.intent.category.DEFAULT" /><data android:mimeType="video/*" /></intent-filter>
         </activity>
         <service android:name=".PlaybackService" android:foregroundServiceType="mediaPlayback" android:exported="true">
             <intent-filter><action android:name="androidx.media3.session.MediaSessionService" /></intent-filter>

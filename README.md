@@ -7,22 +7,30 @@ Contact: **+254 740 636 336** · [GitHub: moses-code-master](https://github.com/
 
 Native Kotlin/Compose Android music app plus a self-hosted Node.js/WebSocket relay. The app plays ordinary MP3 files through each head unit's speakers, without Google Play Services or paid music subscriptions. Requires Android 6.0 or newer, third-party APK support, and network access.
 
+## Video upgrade under review
+
+[CarSync Music & Video 1.5.0 — by Brayo](docs/VIDEO-GUIDE.md) adds synchronized local videos on a development branch. See the guide for video imports, two-screen setup, safety controls and known limitations. It is not an official published release; the download below remains 1.4.0.
+
+Review screenshots: [Video Library](docs/previews/video-library.png) · [Video Player](docs/previews/video-player-portrait.png) · [Fullscreen landscape](docs/previews/video-player-fullscreen.png). These are emulator captures of the working player. Cloud video needs the matching backend update after approval; existing cloud music remains available.
+
 ## Your live cloud setup
 
 - Public source: [moses-code-master/CarSyncMusic](https://github.com/moses-code-master/CarSyncMusic)
-- APK: [v1.3.1 test release](https://github.com/moses-code-master/CarSyncMusic/releases/tag/v1.3.1)
+- APK: [v1.4.0 test release — by Brayo](https://github.com/moses-code-master/CarSyncMusic/releases/tag/v1.4.0)
 - Server address prefilled in Settings on BOTH cars: `https://carsync-music.onrender.com`
 - [Server health check](https://carsync-music.onrender.com/health)
 
 The cloud backend is deployed on Render's Free plan in Frankfurt, without a paid disk. Your laptop can be off. Both cars need network access to this server. Free hosting can sleep and lose sessions/uploads on restart or redeployment; recreate a session if that happens. Import identical local MP3s for lowest data use. This URL is a backend API, so its root path is not a website page; `/health` reports availability. The APK remains a development/test build, and physical head-unit audio timing still needs validation.
 
-## Start here
+## Music setup
+
+These music instructions apply to the published 1.4.0 test build and the review APK. For video setup in 1.5.0, use the [video guide](docs/VIDEO-GUIDE.md).
 
 1. Install Node.js 24 LTS on a laptop or server.
 2. In `backend`, run `npm ci`, then `npm start`. Server listens on port 8080. Keep it running during the trip.
 3. Local Wi-Fi: connect both head units and the server computer to the same hotspot; allow inbound TCP 8080 in the computer firewall. In both apps, Settings → enter `http://192.168.x.x:8080` using the server computer's actual address. Hotspot client isolation must be disabled. A server process is required; the Android host does not run the session server itself.
 4. Mobile data: deploy the server using the HTTPS instructions below; enter the same HTTPS URL in both apps. This endpoint can also be used while on Wi-Fi, allowing reconnect after switching to mobile data without changing the session.
-5. Park. Set car names. Library → Scan phone and allow music permission to discover MP3s already on your device. Tap any song to play. Alternatively use Import MP3; picker imports are copied into app storage and remain available after removing the original drive. Scanned songs stay in their original location and must remain available. Video files and non-MP3 audio are not supported.
+5. Park. Set car names. Library → Scan phone and allow music permission to discover MP3s already on your device. Tap any song to play. Alternatively use Import MP3; picker imports are copied into app storage and remain available after removing the original drive. Scanned songs stay in their original location and must remain available. The music library accepts MP3s; the 1.5.0 review adds a separate Videos section.
 6. Host → Create Session. Guest → Join Session, enter six-digit code. Alternatively import a QR image from the host's Create Session page; review and save the suggested server address before joining. External QR readers can open the `carsync://join` link, which fills the Join Session code and suggests the server address for review.
 7. Host → Music Library → select tracks in order → Save Playlist or Publish to Session. Wait for clocks to synchronize (about six seconds), then Play. Commands deliberately take about 1.8 seconds to execute so both devices have a future deadline.
 8. If both devices imported byte-identical MP3s, only metadata and synchronization traffic cross the network. Different tags/encodings change the SHA-256 hash even if the song sounds identical.
@@ -32,7 +40,7 @@ Local-only playback: open Library and tap a song without joining a session. Volu
 
 ## Install on head units
 
-When upgrading from v1.0.0, uninstall the old app first because its signing key differs; this clears its saved library and session. Then install v1.3.1 and scan/import music again. Future GitHub builds use a persistent private test signing key. Copy `CarSyncMusic.apk` to USB or internal storage, open it with the head unit file manager, and allow installation from that file manager when prompted. The published APK uses a non-debuggable release build, signed with the persistent private test key. For public distribution build and sign your own release APK with a private keystore. Do not install while driving.
+When upgrading from v1.0.0, uninstall the old app first because its signing key differs; this clears its saved library and session. Then install the current APK and scan/import music again. Versions 1.1 and newer update in place with the persistent private test signing key; do not uninstall these versions to install the review APK. Copy the APK to USB or internal storage, open it with the head unit file manager, and allow installation from that file manager when prompted. The APK uses a non-debuggable release build signed with that same key. For a separately distributed fork, use your own private keystore. Do not install while driving.
 
 For USB debugging, `adb install -r CarSyncMusic-debug.apk`. Allow notification permission on Android 13+ to see media controls. Some manufacturers require allowing background activity or disabling battery restrictions for CarSync. Ordinary Android head units are supported; Android Auto projection / certified Android Automotive app integration is outside this project.
 
@@ -93,3 +101,4 @@ Read `docs/ARCHITECTURE.md`, `docs/TESTING.md`, and `docs/VALIDATION.md` for the
 ## Source references
 
 Android background-playback architecture follows [MediaSessionService guidance](https://developer.android.com/media/media3/session/background-playback). Compose dependency alignment follows the [official BOM guide](https://developer.android.com/develop/ui/compose/bom). Build compatibility: [AGP 8.9 release notes](https://developer.android.com/build/releases/agp-8-9-0-release-notes).
+

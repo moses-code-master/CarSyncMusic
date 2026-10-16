@@ -103,25 +103,7 @@ jobs:
           profile: pixel_2
           disable-animations: true
           working-directory: android
-          script: |
-            sh gradlew assembleRelease --no-daemon
-            adb install app/build/outputs/apk/release/app-release.apk
-            adb shell am start -W -n app.carsync.music/.MainActivity
-            sleep 3
-            adb shell ps -A | grep app.carsync.music || adb shell ps | grep app.carsync.music
-            adb uninstall app.carsync.music
-            adb install /tmp/carsync-previous.apk
-            adb install -r app/build/outputs/apk/release/app-release.apk
-            adb shell am start -W -n app.carsync.music/.MainActivity
-            sleep 3
-            adb shell ps -A | grep app.carsync.music || adb shell ps | grep app.carsync.music
-            adb uninstall app.carsync.music
-            result=0
-            sh gradlew connectedDebugAndroidTest --no-daemon || result=$?
-            mkdir -p ../runtime-results
-            adb logcat -d > ../runtime-results/logcat.txt || true
-            adb pull /sdcard/Download/CarSync-previews ../runtime-results/screenshots || true
-            exit $result
+          script: sh ../.github/scripts/runtime-check.sh
       - name: Collect device diagnostics and screen captures
         if: always()
         run: |
