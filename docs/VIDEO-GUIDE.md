@@ -14,6 +14,8 @@ Play locally without a session or internet. Open Player, confirm parked, and use
 
 ## Two screens
 
+The review APK requires the matching protocol-2 backend from this branch for video sessions. The existing Render deployment is left unchanged pending approval; the APK reports an update-required message if it finds the older server. Local video playback works immediately. After the backend update is approved and deployed, use https://carsync-music.onrender.com on both devices without hosting anything on a laptop. For developer testing before deployment, run `npm ci` and `npm start` in `backend`, and point both devices at that computer's private-network HTTP address on port 8080.
+
 Update both devices to 1.5.0 and import byte-identical copies on both. Matching titles are insufficient: encoding, metadata or container changes produce a different SHA-256. Create a host session and join with the same cloud server and code. The host chooses a video or publishes a video playlist; use Play after the clocks are ready. Both players use future deadlines, late-start catch-up, pause/resume/seek, progression and reconnect snapshots. Each screen must confirm parked before showing its own picture.
 
 A missing/mismatched video stays silent and displays an exact-file import instruction. It never substitutes another video or attempts a video relay. Importing the matching file automatically recovers the canonical timeline. Existing music clients retain audio-session compatibility; video sessions require both clients to advertise 1.5 video capability. Older clients receive an update-required message rather than video metadata they cannot interpret. Free Render sessions can sleep or disappear after restart; create a new session when needed.
