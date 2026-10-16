@@ -28,6 +28,6 @@ The MIT permission and warranty text remain intact. Third-party dependency notic
 
 ## Release practice
 
-Use `.github/RELEASE_TEMPLATE.md` for future official release notes. Identify the release as **CarSync Music — by Brayo**, include the creator/contact/profile, and distinguish a review candidate from a published release. Do not rewrite historical releases or remove their notices. Version 1.4.0 is a PR candidate until approved and merged; the README's existing APK download remains the published 1.3.1 release.
+Use `.github/RELEASE_TEMPLATE.md` for future official release notes. Identify the release as **CarSync Music — by Brayo**, include the creator/contact/profile, and distinguish a review candidate from a published release. Do not rewrite historical releases or remove their notices. Version 1.4.0 is the approved creator-branding release. The README links to its signed APK and release notes.
 
 The Android application ID remains `app.carsync.music`. Signing uses the existing private GitHub Actions test key; no keystore or credential belongs in source control. CI checks both clean installation and an in-place update from the signed 1.3.1 APK on Android 6, 8 and 15. No playback/backend changes or paid services are part of this branding update.

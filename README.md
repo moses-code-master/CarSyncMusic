@@ -3,14 +3,14 @@
 **by Brayo** · Created and maintained by **Brayo**
 Contact: **+254 740 636 336** · [GitHub: moses-code-master](https://github.com/moses-code-master)
 
-[Creator branding and attribution](docs/BRANDING.md) · [1.4.0 branding candidate](docs/releases/1.4.0.md)
+[Creator branding and attribution](docs/BRANDING.md) · [1.4.0 release notes](docs/releases/1.4.0.md)
 
 Native Kotlin/Compose Android music app plus a self-hosted Node.js/WebSocket relay. The app plays ordinary MP3 files through each head unit's speakers, without Google Play Services or paid music subscriptions. Requires Android 6.0 or newer, third-party APK support, and network access.
 
 ## Your live cloud setup
 
 - Public source: [moses-code-master/CarSyncMusic](https://github.com/moses-code-master/CarSyncMusic)
-- APK: [v1.3.1 test release](https://github.com/moses-code-master/CarSyncMusic/releases/tag/v1.3.1)
+- APK: [v1.4.0 test release](https://github.com/moses-code-master/CarSyncMusic/releases/tag/v1.4.0)
 - Server address prefilled in Settings on BOTH cars: `https://carsync-music.onrender.com`
 - [Server health check](https://carsync-music.onrender.com/health)
 
