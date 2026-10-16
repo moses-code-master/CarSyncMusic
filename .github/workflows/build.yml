@@ -93,6 +93,8 @@ jobs:
           echo 'KERNEL=="kvm", GROUP="kvm", MODE="0666", OPTIONS+="static_node=kvm"' | sudo tee /etc/udev/rules.d/99-kvm4all.rules
           sudo udevadm control --reload-rules
           sudo udevadm trigger --name-match=kvm
+      - name: Fetch previous APK for update compatibility check
+        run: curl --fail --location --retry 2 https://github.com/moses-code-master/CarSyncMusic/releases/download/v1.3.1/CarSyncMusic.apk --output /tmp/carsync-previous.apk
       - uses: reactivecircus/android-emulator-runner@v2
         with:
           api-level: ${{ matrix.api }}
@@ -104,6 +106,12 @@ jobs:
           script: |
             sh gradlew assembleRelease --no-daemon
             adb install app/build/outputs/apk/release/app-release.apk
+            adb shell am start -W -n app.carsync.music/.MainActivity
+            sleep 3
+            adb shell ps -A | grep app.carsync.music || adb shell ps | grep app.carsync.music
+            adb uninstall app.carsync.music
+            adb install /tmp/carsync-previous.apk
+            adb install -r app/build/outputs/apk/release/app-release.apk
             adb shell am start -W -n app.carsync.music/.MainActivity
             sleep 3
             adb shell ps -A | grep app.carsync.music || adb shell ps | grep app.carsync.music

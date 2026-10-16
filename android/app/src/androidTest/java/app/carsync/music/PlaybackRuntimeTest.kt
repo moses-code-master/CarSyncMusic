@@ -54,6 +54,30 @@ class PlaybackRuntimeTest {
         await("Library did not load") { sync.state.value.library.any { it.hash == track.hash } }
     }
     @After fun cleanup() { main { sync.leave() }; scenario.close() }
+    @Test fun creatorBrandingAndAboutRemainAvailableDuringPlayback() {
+        val device = UiDevice.getInstance(instrumentation)
+        assertTrue(device.findObject(UiSelector().text("Created by Brayo")).waitForExists(5000))
+        capture(device, "brayo-welcome.png")
+        main { sync.playTrack(track.hash) }
+        await("Branding test playback failed") { sync.state.value.playing && sync.state.value.positionMs > 1000 }
+        device.findObject(UiSelector().text("Settings")).click()
+        device.findObject(UiSelector().text("About CarSync Music")).click()
+        assertTrue(device.findObject(UiSelector().text("Brayo")).waitForExists(5000))
+        assertTrue(device.findObject(UiSelector().text("+254 740 636 336")).exists())
+        assertTrue(device.findObject(UiSelector().textContains("moses-code-master")).exists())
+        capture(device, "brayo-about-portrait.png")
+        device.setOrientationLeft(); Thread.sleep(500); capture(device, "brayo-about-landscape.png"); device.setOrientationNatural(); Thread.sleep(500)
+        val licenseButton = device.findObject(UiSelector().text("View MIT License"))
+        if (!licenseButton.exists()) androidx.test.uiautomator.UiScrollable(UiSelector().scrollable(true)).scrollTextIntoView("View MIT License")
+        assertTrue(device.findObject(UiSelector().text("Version ${BuildConfig.VERSION_NAME}")).exists())
+        licenseButton.click()
+        assertTrue(device.findObject(UiSelector().textContains("Permission is hereby granted")).waitForExists(5000))
+        val license = context.assets.open("LICENSE.txt").bufferedReader().use { it.readText() }
+        assertTrue(license.contains("Copyright (c) 2026 Brayo"))
+        assertTrue(license.contains("Copyright (c) 2026 CarSync Music contributors"))
+        assertTrue("About stopped playback", sync.state.value.playing)
+        assertEquals("app.carsync.music", context.packageName)
+    }
     @Test fun importWithoutSystemFilePickerShowsHelpInsteadOfCrashing() {
         val device = UiDevice.getInstance(instrumentation)
         val handlers = listOf(android.content.Intent.ACTION_OPEN_DOCUMENT, android.content.Intent.ACTION_GET_CONTENT).flatMap { action ->

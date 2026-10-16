@@ -1,0 +1,7 @@
+<resources>
+    <style name="AppTheme" parent="AppThemeBase">
+        <item name="android:windowSplashScreenBackground">@color/brand_background</item>
+        <item name="android:windowSplashScreenAnimatedIcon">@drawable/ic_carsync</item>
+        <item name="android:windowSplashScreenBrandingImage">@drawable/brand_wordmark</item>
+    </style>
+</resources>
