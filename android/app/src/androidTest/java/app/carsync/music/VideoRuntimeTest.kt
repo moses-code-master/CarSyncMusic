@@ -63,7 +63,7 @@ class VideoRuntimeTest {
         Thread.sleep(900); capture("video-player-fullscreen.png"); device.pressBack(); Thread.sleep(600)
         main { sync.command("pause") }; await("Local video pause") { !sync.state.value.playing }
         main { sync.command("seek", 12000); sync.command("play") }; await("Local video seek/resume") { sync.state.value.playing && sync.state.value.positionMs > 12000 }
-        main { sync.command("seek", 44000) }; await("Video playlist automatic advance") { sync.state.value.index == 1 && sync.state.value.playing }
+        main { sync.command("seek", 44000) }; await("Video playlist automatic advance") { sync.state.value.index == 1 && sync.state.value.playing && sync.state.value.positionMs < 4000 }
         main { sync.audioOnlyVideo(true) }; assertFalse(sync.state.value.showVideo)
         val before = sync.state.value.positionMs; await("Audio-only video stopped timeline") { sync.state.value.positionMs > before + 500 }
         main { sync.confirmParked(); sync.driving(true) }; assertFalse(sync.state.value.showVideo)
