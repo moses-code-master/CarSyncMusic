@@ -124,11 +124,14 @@ private val pages = listOf("Home", "Music Library", "Playlists", "Create Session
     val colors = darkColorScheme(primary = Accent, onPrimary = Color(0xFF162609), background = Color(0xFF0B1016), surface = Panel, onSurface = Color(0xFFF2F5FA), secondary = Color(0xFF92BFFF))
     MaterialTheme(colorScheme = colors) {
         Scaffold(topBar = {
-            Column(Modifier.background(Color(0xFF0C1017)).padding(horizontal = 20.dp, vertical = 10.dp)) {
+            Column(Modifier.background(Color(0xFF0C1017)).statusBarsPadding().padding(horizontal = 20.dp, vertical = 10.dp)) {
                 Row(verticalAlignment = Alignment.CenterVertically) {
                     Icon(painterResource(R.drawable.ic_wave), null, tint = Accent, modifier = Modifier.size(34.dp)); Spacer(Modifier.width(12.dp))
-                    Text("CarSync", fontWeight = FontWeight.Bold, fontSize = 26.sp); Text("  MUSIC", color = Muted, fontSize = 13.sp)
-                    Spacer(Modifier.weight(1f)); Text(if (s.connected) "● ${s.role.uppercase()} · ${s.code}" else if (s.role == "local") "LOCAL AUDIO" else "● OFFLINE", color = if (s.connected) Accent else Muted)
+                    Column(Modifier.weight(1f)) {
+                        Text(CreatorBrand.PRODUCT, fontWeight = FontWeight.Bold, fontSize = 22.sp, maxLines = 1, overflow = TextOverflow.Ellipsis)
+                        Text(CreatorBrand.SIGNATURE, color = Accent, fontSize = 12.sp)
+                    }
+                    Text(if (s.connected) "● ${s.role.uppercase()} · ${s.code}" else if (s.role == "local") "LOCAL AUDIO" else "● OFFLINE", fontSize = 12.sp, color = if (s.connected) Accent else Muted)
                 }
                 Text(page, color = Muted, fontSize = 15.sp, modifier = Modifier.padding(top = 6.dp))
             }
@@ -138,7 +141,7 @@ private val pages = listOf("Home", "Music Library", "Playlists", "Create Session
                 Text(s.message, color = if (s.audioError.isNotBlank()) Color(0xFFFFB19F) else Muted, fontSize = 13.sp, maxLines = 3, modifier = Modifier.padding(horizontal = 16.dp, vertical = 8.dp))
                 NavigationBar(containerColor = Color(0xFF10171F)) {
                     val nav = listOf("Home" to Icons.Default.Home, "Music Library" to Icons.Default.List, "Now Playing" to Icons.Default.PlayArrow, "Create Session" to Icons.Default.Share, "Settings" to Icons.Default.Settings)
-                    nav.forEachIndexed { i, (target, icon) -> NavigationBarItem(selected = page == target || (i == 3 && page in listOf("Join Session", "Connected Cars")) || (i == 1 && page == "Playlists"), onClick = { page = target }, icon = { Icon(icon, target) }, label = { Text(listOf("Home", "Library", "Player", "Session", "Settings")[i], fontSize = 12.sp) }) }
+                    nav.forEachIndexed { i, (target, icon) -> NavigationBarItem(selected = page == target || (i == 3 && page in listOf("Join Session", "Connected Cars")) || (i == 1 && page == "Playlists") || (i == 4 && page in listOf("About", "License")), onClick = { page = target }, icon = { Icon(icon, target) }, label = { Text(listOf("Home", "Library", "Player", "Session", "Settings")[i], fontSize = 12.sp) }) }
                 }
             }
         }) { insets ->
@@ -148,6 +151,7 @@ private val pages = listOf("Home", "Music Library", "Playlists", "Create Session
                     "Home" -> {
                         Card(colors = CardDefaults.cardColors(containerColor = Color(0xFF243B28)), shape = RoundedCornerShape(28.dp)) { Column(Modifier.padding(24.dp), verticalArrangement = Arrangement.spacedBy(12.dp)) {
                             Text("YOUR ROAD. YOUR SOUND.", color = Accent, fontSize = 12.sp, fontWeight = FontWeight.Bold)
+                            Text(CreatorBrand.WELCOME_CREDIT, color = Accent, fontSize = 16.sp, fontWeight = FontWeight.Medium)
                             Text("Good music.\nShared miles.", fontSize = 38.sp, fontWeight = FontWeight.Bold)
                             Text("Play your phone’s MP3s instantly. Connect another car when you’re ready.", color = Color(0xFFCEDACD), fontSize = 18.sp)
                             LargeButton("Find music on this phone", !s.busy) { scan(); page = "Music Library" }
@@ -249,6 +253,7 @@ private val pages = listOf("Home", "Music Library", "Playlists", "Create Session
                         if (s.cars.isEmpty()) Text("Create or join a session to see both cars.")
                     }
                     "Settings" -> {
+                        if (!s.driving) LargeButton("About CarSync Music") { page = "About" }
                         Title("Setup & playback", "Use HTTPS for mobile data. Use a private Wi-Fi server address on a shared hotspot.")
                         SettingToggle("Driving mode", s.driving, "Hides library, session setup and complex controls. Park before disabling; automatic vehicle-speed detection is unavailable.") { sync.driving(it); if (it) page = "Now Playing" }
                         if (!s.driving) {
@@ -272,6 +277,8 @@ private val pages = listOf("Home", "Music Library", "Playlists", "Create Session
                             Text("No Google Play Services required. Intended for head units that install ordinary Android APKs; this is not an Android Auto projection app.", color = Muted)
                         }
                     }
+                    "About" -> AboutScreen({ page = "License" }, sync::message)
+                    "License" -> { LargeButton("Back to About") { page = "About" }; ProjectLicenseScreen() }
                 }
             }
         }

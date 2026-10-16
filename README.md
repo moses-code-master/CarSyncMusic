@@ -1,5 +1,10 @@
 # CarSync Music
 
+**by Brayo** · Created and maintained by **Brayo**
+Contact: **+254 740 636 336** · [GitHub: moses-code-master](https://github.com/moses-code-master)
+
+[Creator branding and attribution](docs/BRANDING.md) · [1.4.0 branding candidate](docs/releases/1.4.0.md)
+
 Native Kotlin/Compose Android music app plus a self-hosted Node.js/WebSocket relay. The app plays ordinary MP3 files through each head unit's speakers, without Google Play Services or paid music subscriptions. Requires Android 6.0 or newer, third-party APK support, and network access.
 
 ## Your live cloud setup
@@ -88,10 +93,3 @@ Read `docs/ARCHITECTURE.md`, `docs/TESTING.md`, and `docs/VALIDATION.md` for the
 ## Source references
 
 Android background-playback architecture follows [MediaSessionService guidance](https://developer.android.com/media/media3/session/background-playback). Compose dependency alignment follows the [official BOM guide](https://developer.android.com/develop/ui/compose/bom). Build compatibility: [AGP 8.9 release notes](https://developer.android.com/build/releases/agp-8-9-0-release-notes).
-
-
-
-
-
-
-

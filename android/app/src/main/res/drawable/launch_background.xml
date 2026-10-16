@@ -1,0 +1,5 @@
+<layer-list xmlns:android="http://schemas.android.com/apk/res/android">
+    <item android:drawable="@color/brand_background" />
+    <item android:width="108dp" android:height="108dp" android:gravity="center" android:drawable="@drawable/ic_launcher_foreground" />
+    <item android:gravity="bottom|center_horizontal" android:bottom="32dp" android:drawable="@drawable/brand_wordmark" />
+</layer-list>
