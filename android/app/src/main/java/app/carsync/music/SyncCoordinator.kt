@@ -193,6 +193,7 @@ class SyncCoordinator(private val context: Context, val dao: LibraryDao, prefere
         val uri = if (local != null) local.uri else if (relayReady) "${state.value.endpoint}/sessions/${state.value.code}/audio/${remote.hash}" else null
         if (uri == null) { p.pause(); p.clearMediaItems(); preparedHash = ""; update { it.copy(index = f.index, missing = true, playing = false, audioError = "", message = if (remote.mediaType == "video") "Missing matching video: ${remote.title}. Import the exact same file on this device. Video is local-only; no cloud upload." else if (it.sharing) "Waiting for the host to upload ${remote.title}. Playback will start automatically." else "Connected, but this song is not on this device. Ask the host to tap Share music with guest, or import the identical MP3.") }; return false }
         val metadata = MediaMetadata.Builder().setTitle(remote.title).setArtist(remote.artist).setAlbumTitle(remote.album).apply { local?.artPath?.let { setArtworkUri(Uri.fromFile(java.io.File(it))) } }.build()
+        activeRevision = -1
         p.pause(); p.setMediaItem(MediaItem.Builder().setMediaId(remote.hash).setUri(uri).setMimeType(remote.mimeType).setMediaMetadata(metadata).build(), f.positionMs); p.prepare(); preparedHash = remote.hash
         update { it.copy(missing = false, index = f.index, audioError = "") }; return true
     }
@@ -212,7 +213,9 @@ class SyncCoordinator(private val context: Context, val dao: LibraryDao, prefere
         if (!prepare(f)) return
         if (state.value.track?.mediaType == "video" && state.value.automotive && (!state.value.vehicleKnown || state.value.vehicleRestricted)) { p.pause(); message("Vehicle parking restrictions block video playback."); return }
         val target = f.target(serverNow(), state.value.latencyMs).coerceAtMost(state.value.queue.getOrNull(f.index)?.durationMs ?: Long.MAX_VALUE)
-        if (activeRevision != f.revision || abs(p.currentPosition - target) > 250) { p.seekTo(target); activeRevision = f.revision; p.playbackParameters = PlaybackParameters(1f) }
+        // Apply a command once. Seeking again on every READY callback can keep a
+        // slow video decoder buffering forever. Once playing, tick() corrects drift.
+        if (activeRevision != f.revision) { p.seekTo(target); activeRevision = f.revision; p.playbackParameters = PlaybackParameters(1f) }
         p.playWhenReady = f.playing
         update { it.copy(index = f.index, message = if (clock.rttMs > 500) "High network delay: synchronization may be less accurate." else "Following synchronized playback") }
     }

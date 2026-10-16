@@ -87,7 +87,9 @@ class VideoRuntimeTest {
         val mp4 = fixture("CarSync-Landscape.mp4"); val mkv = fixture("CarSync-Landscape.mkv")
         main { sync.configure("http://10.0.2.2:8080", "Video host"); sync.create() }
         await("Host clock") { sync.state.value.connected && sync.state.value.clockReady }
-        main { sync.playTrack(mp4.hash); sync.confirmParked() }; await("Host video playback") { sync.state.value.playing && sync.state.value.track?.hash == mp4.hash }
+        main { sync.playTrack(mp4.hash); sync.confirmParked() }
+        UiDevice.getInstance(instrumentation).findObject(UiSelector().text("Player")).click()
+        await("Host video playback and frames") { var frames = 0; main { frames = sync.renderingPlayer()?.videoDecoderCounters?.renderedOutputBufferCount ?: 0 }; sync.state.value.playing && sync.state.value.track?.hash == mp4.hash && frames > 2 }
         val db = Room.inMemoryDatabaseBuilder(context, LibraryDb::class.java).build()
         runBlocking { db.dao().insert(mkv) } // Different container/hash must not substitute for MP4.
         context.getSharedPreferences("video-guest", Context.MODE_PRIVATE).edit().clear().commit()
@@ -102,8 +104,9 @@ class VideoRuntimeTest {
             main { sync.command("pause") }; await("Shared video pause") { !sync.state.value.playing && !guest.state.value.playing }
             main { sync.command("seek", 15000); sync.command("play") }; await("Shared video seek/resume") { guest.state.value.playing && guest.state.value.positionMs > 15000 && sync.state.value.positionMs > 15000 }
             main { guest.detach(); player.release(); player = ExoPlayer.Builder(context).build(); player.setVideoSurfaceView(surface); guest.attach(player) }
-            await("Video guest reconnect") { guest.state.value.connected && guest.state.value.playing && guest.state.value.positionMs > 15000 }
-            main { sync.command("next") }; await("Shared next video") { guest.state.value.track?.hash == mkv.hash && guest.state.value.playing }
+            await("Video guest reconnect") { var frames = 0; main { frames = player.videoDecoderCounters?.renderedOutputBufferCount ?: 0 }; guest.state.value.connected && guest.state.value.playing && guest.state.value.track?.hash == sync.state.value.track?.hash && guest.state.value.driftMs?.let { kotlin.math.abs(it) < 300 } == true && frames > 2 }
+            val nextHash = sync.state.value.let { it.queue[(it.index + 1) % it.queue.size].hash }
+            main { sync.command("next") }; await("Shared next video") { guest.state.value.track?.hash == nextHash && guest.state.value.playing }
         } finally { main { guest.leave(); guest.shutdown(); player.release(); (surface.parent as? android.view.ViewGroup)?.removeView(surface); sync.endSession() }; db.close(); await("End video session") { sync.state.value.code.isBlank() } }
     }
 
