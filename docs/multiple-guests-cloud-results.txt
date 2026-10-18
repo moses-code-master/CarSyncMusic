@@ -1,0 +1,9 @@
+2026-10-18T18:48:02.013Z
+One host and three guests created on live service
+Four authenticated WebSockets connected; configured maximum is ten guests
+One real MP3 upload available to all three guests; concurrent authenticated range reads verified
+All guests received the same scheduled play deadline and position
+One guest reconnected with the same token and playback state without using an extra place
+Group pause delivered after guest reconnect
+Revoking sharing removed audio availability and blocked media access for every guest
+No physical speaker timing was measured.

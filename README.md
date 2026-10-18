@@ -7,16 +7,16 @@ Contact: **+254 740 636 336** · [GitHub: moses-code-master](https://github.com/
 
 Native Kotlin/Compose Android music app plus a self-hosted Node.js/WebSocket relay. The app plays ordinary MP3 files through each head unit's speakers, without Google Play Services or paid music subscriptions. Requires Android 6.0 or newer, third-party APK support, and network access.
 
-## Video upgrade under review
+## Video playback
 
-[CarSync Music & Video 1.5.0 — by Brayo](docs/VIDEO-GUIDE.md) adds synchronized local videos on a development branch. See the guide for video imports, two-screen setup, safety controls and known limitations. It is not an official published release; the download below remains 1.4.0.
+Version 1.6.0 includes the synchronized local-video features described in the [video guide](docs/VIDEO-GUIDE.md), plus multi-guest music sharing. Video files must be imported identically on every device; video relay remains disabled. Parked-picture restrictions and existing compatibility limits remain.
 
-Review screenshots: [Video Library](docs/previews/video-library.png) · [Video Player](docs/previews/video-player-portrait.png) · [Fullscreen landscape](docs/previews/video-player-fullscreen.png). These are emulator captures of the working player. Cloud video needs the matching backend update after approval; existing cloud music remains available.
+Review screenshots: [Video Library](docs/previews/video-library.png) · [Video Player](docs/previews/video-player-portrait.png) · [Fullscreen landscape](docs/previews/video-player-fullscreen.png). These are emulator captures of the working player. The cloud backend includes the matching media protocol and multi-guest update.
 
 ## Your live cloud setup
 
 - Public source: [moses-code-master/CarSyncMusic](https://github.com/moses-code-master/CarSyncMusic)
-- APK: [v1.4.0 test release — by Brayo](https://github.com/moses-code-master/CarSyncMusic/releases/tag/v1.4.0)
+- APK: [v1.6.0 test release — multiple guests](https://github.com/moses-code-master/CarSyncMusic/releases/tag/v1.6.0)
 - Server address prefilled in Settings on BOTH cars: `https://carsync-music.onrender.com`
 - [Server health check](https://carsync-music.onrender.com/health)
 
@@ -24,11 +24,11 @@ The cloud backend is deployed on Render's Free plan in Frankfurt, without a paid
 
 ## Group music sharing
 
-Version 1.6.0 supports one host plus up to **10 guests**. Every guest joins the same session code. The host taps **Share music with guestss** once, and all guests can stream the shared MP3s. Connected Cars lists every participant. [Group setup, limits and update notes](docs/releases/1.6.0.md).
+Version 1.6.0 supports one host plus up to **10 guests**. Every guest joins the same session code. The host taps **Share music with guests** once, and all guests can stream the shared MP3s. Connected Cars lists every participant. [Group setup, limits and update notes](docs/releases/1.6.0.md).
 
 ## Music setup
 
-These music instructions apply to the published 1.4.0 test build and the review APK. For video setup in 1.5.0, use the [video guide](docs/VIDEO-GUIDE.md).
+These music instructions apply to the 1.6.0 test build. Every guest joins the same host session. For local video setup, use the [video guide](docs/VIDEO-GUIDE.md).
 
 1. Install Node.js 24 LTS on a laptop or server.
 2. In `backend`, run `npm ci`, then `npm start`. Server listens on port 8080. Keep it running during the trip.
