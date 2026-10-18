@@ -22,6 +22,10 @@ Review screenshots: [Video Library](docs/previews/video-library.png) · [Video P
 
 The cloud backend is deployed on Render's Free plan in Frankfurt, without a paid disk. Your laptop can be off. Both cars need network access to this server. Free hosting can sleep and lose sessions/uploads on restart or redeployment; recreate a session if that happens. Import identical local MP3s for lowest data use. This URL is a backend API, so its root path is not a website page; `/health` reports availability. The APK remains a development/test build, and physical head-unit audio timing still needs validation.
 
+## Group music sharing
+
+Version 1.6.0 supports one host plus up to **10 guests**. Every guest joins the same session code. The host taps **Share music with guestss** once, and all guests can stream the shared MP3s. Connected Cars lists every participant. [Group setup, limits and update notes](docs/releases/1.6.0.md).
+
 ## Music setup
 
 These music instructions apply to the published 1.4.0 test build and the review APK. For video setup in 1.5.0, use the [video guide](docs/VIDEO-GUIDE.md).
@@ -34,7 +38,7 @@ These music instructions apply to the published 1.4.0 test build and the review 
 6. Host → Create Session. Guest → Join Session, enter six-digit code. Alternatively import a QR image from the host's Create Session page; review and save the suggested server address before joining. External QR readers can open the `carsync://join` link, which fills the Join Session code and suggests the server address for review.
 7. Host → Music Library → select tracks in order → Save Playlist or Publish to Session. Wait for clocks to synchronize (about six seconds), then Play. Commands deliberately take about 1.8 seconds to execute so both devices have a future deadline.
 8. If both devices imported byte-identical MP3s, only metadata and synchronization traffic cross the network. Different tags/encodings change the SHA-256 hash even if the song sounds identical.
-9. Missing song: guest gets an explicit waiting message. Import the identical MP3, or on the host Player tap Share music with guest for audio you have permission to share. The host uploads missing playlist songs automatically after permission is enabled. The guest starts automatically when each song is ready; no manual retry is required. Uploaded files are streamed with HTTP range requests; metadata-only playlist synchronization does not distribute audio.
+9. Missing song: guest gets an explicit waiting message. Import the identical MP3, or on the host Player tap Share music with guests for audio you have permission to share. The host uploads missing playlist songs automatically after permission is enabled. The guest starts automatically when each song is ready; no manual retry is required. Uploaded files are streamed with HTTP range requests; metadata-only playlist synchronization does not distribute audio.
 
 Local-only playback: open Library and tap a song without joining a session. Volume always affects only the current car. Playlist editing supports rename, remove, add, reorder and shuffle; synchronized repeat supports off/one/all. Shuffle publishes a new canonical order and resets to track one.
 
@@ -79,7 +83,7 @@ The source is available in the public GitHub repository [moses-code-master/CarSy
 
 Use a Linux machine with Docker and Docker Compose; a VPS may cost money even though the software is free. Point your domain's A/AAAA records at that machine, open inbound 80/443, and set `DOMAIN=music.yourdomain.example` in a project-root `.env`. Run `docker compose up -d --build`. Caddy obtains HTTPS certificates and proxies HTTP and WebSocket traffic to the private server container. No public 8080 port is needed. Check `https://your-domain/health` before entering the URL in both apps. The supplied example domain is a placeholder.
 
-Data is persisted in the Docker volume `sessions`. Back it up if needed. Restrict filesystem access because it contains permitted MP3 uploads and session records. Use a single backend instance; this implementation does not support replicas or load-balanced sessions. Stop with `docker compose down` (keeps data). Session lifetime and telemetry retention are 24 hours. Host can end a session immediately. Six-digit codes are invitations, not passwords; use trusted networks and keep codes private. Server limits join attempts and uses independent 256-bit bearer credentials after joining. The guest slot remains reserved to its token until expiration or host deletion; leaving without credentials requires creating a fresh session.
+Data is persisted in the Docker volume `sessions`. Back it up if needed. Restrict filesystem access because it contains permitted MP3 uploads and session records. Use a single backend instance; this implementation does not support replicas or load-balanced sessions. Stop with `docker compose down` (keeps data). Session lifetime and telemetry retention are 24 hours. Host can end a session immediately. Six-digit codes are invitations, not passwords; use trusted networks and keep codes private. Server limits join attempts and uses independent 256-bit bearer credentials after joining. Each guest place remains reserved to its token until expiration or host deletion; a guest without its old credentials uses a new place.
 
 ## What is implemented and what still needs device validation
 
@@ -96,7 +100,7 @@ Read `docs/ARCHITECTURE.md`, `docs/TESTING.md`, and `docs/VALIDATION.md` for the
 - Driving mode is manual because generic aftermarket Android exposes no reliable vehicle-speed API. It hides imports, playlist editing, session setup and seeking. Basic controls remain large. It cannot automatically detect movement or enforce driver/passenger roles.
 - QR joining supports QR image decoding with ZXing and code entry; it has no integrated live-camera scanner. Guest album art is shown only when a matching local file contains artwork; artwork is not uploaded separately.
 - Android may stop a paused service, and manufacturer power policies may terminate background apps. Force-stop silences that car; reopening restores session credentials and catches up. Server restart restores sessions paused to avoid an invalid time anchor. Internet disconnection keeps buffered/local audio playing and temporarily disables shared controls.
-- Sessions are limited to two cars and expire after 24 hours. No account system, public music catalog, DRM bypass, streaming subscription integration or production fleet scaling is included.
+- Sessions support one host and up to ten registered guests by default and expire after 24 hours. No account system, public music catalog, DRM bypass, streaming subscription integration or production fleet scaling is included.
 
 ## Source references
 

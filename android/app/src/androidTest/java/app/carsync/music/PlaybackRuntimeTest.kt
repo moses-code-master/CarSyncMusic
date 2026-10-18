@@ -183,6 +183,36 @@ class PlaybackRuntimeTest {
             await("Guest reconnect playback failed") { guest.state.value.connected && guest.state.value.playing && guest.state.value.positionMs > 15000 }
         } finally { main { guest.leave(); guest.shutdown(); p.release() }; db.close(); main { sync.endSession() }; await("Host session cleanup") { sync.state.value.code.isBlank() } }
     }
+    @Test fun hostSharesAudioWithThreeGuestsAndOneReconnectsWithoutStoppingTheOthers() {
+        main { sync.configure("http://10.0.2.2:8080", "Group host"); sync.create() }
+        await("Group host connection failed") { sync.state.value.connected && sync.state.value.clockReady }
+        main { sync.playTrack(track.hash) }; await("Host MP3 failed") { sync.state.value.playing }
+        val databases = mutableListOf<LibraryDb>(); val guests = mutableListOf<SyncCoordinator>(); val players = mutableListOf<ExoPlayer>()
+        fun relayPlayer(guest: SyncCoordinator): ExoPlayer {
+            val client = guest.http.newBuilder().addInterceptor(Interceptor { chain -> chain.proceed(chain.request().newBuilder().header("Authorization", "Bearer ${guest.audioToken()}").build()) }).build()
+            return ExoPlayer.Builder(context).setMediaSourceFactory(DefaultMediaSourceFactory(DefaultDataSource.Factory(context, OkHttpDataSource.Factory(client)))).build().apply { volume = 0f }
+        }
+        try {
+            for (i in 0..2) {
+                val db = Room.inMemoryDatabaseBuilder(context, LibraryDb::class.java).build(); databases.add(db)
+                val prefs = "group-guest-$i"; context.getSharedPreferences(prefs, Context.MODE_PRIVATE).edit().clear().commit()
+                main { val guest = SyncCoordinator(context, db.dao(), prefs); guest.configure("http://10.0.2.2:8080", "Guest $i"); guests.add(guest); val player = relayPlayer(guest); players.add(player); guest.attach(player); guest.join(sync.state.value.code) }
+            }
+            await("Not all guests joined") { guests.size == 3 && guests.all { it.state.value.connected && it.state.value.missing } && sync.state.value.cars.count { it.role == "guest" && it.online } == 3 }
+            assertEquals(10, sync.state.value.maxGuests)
+            main { sync.settings(sharing = true) }
+            await("Not all three guests decoded the shared MP3", 45000) { guests.all { it.state.value.playing && it.state.value.positionMs > 500 } }
+            main { sync.command("pause") }; await("Group pause failed") { !sync.state.value.playing && guests.all { !it.state.value.playing } }
+            main { sync.command("seek", 5000); sync.command("play") }
+            await("Group seek/play failed") { guests.all { it.state.value.playing && it.state.value.positionMs >= 5000 } }
+            main { guests[0].detach(); players[0].release(); players[0] = relayPlayer(guests[0]); guests[0].attach(players[0]) }
+            await("A reconnect disturbed the group") { guests.all { it.state.value.connected && it.state.value.playing } && sync.state.value.cars.size == 4 }
+            main { sync.settings(sharing = false) }; await("Revocation did not stop every relay guest") { guests.all { it.state.value.missing && !it.state.value.playing } }
+        } finally {
+            main { guests.forEach { it.leave(); it.shutdown() }; players.forEach { it.release() }; sync.endSession() }
+            databases.forEach { it.close() }; await("Group session cleanup") { sync.state.value.code.isBlank() }
+        }
+    }
     @Test fun guestWithoutLocalMusicStartsAutomaticallyAfterHostPermitsSharing() {
         main { sync.configure("http://10.0.2.2:8080", "Relay host"); sync.create() }
         await("Host connection failed") { sync.state.value.connected && sync.state.value.clockReady }
@@ -201,7 +231,7 @@ class PlaybackRuntimeTest {
             await("Missing-file warning absent") { guest.state.value.missing }; assertFalse(guest.state.value.playing)
             val device = UiDevice.getInstance(instrumentation)
             device.findObject(UiSelector().text("Player")).click()
-            device.findObject(UiSelector().text("Share music with guest")).click()
+            device.findObject(UiSelector().text("Share music with guests")).click()
             await("Sharing not enabled") { sync.state.value.sharing }
             await("Automatic upload did not complete") { sync.state.value.message.contains("Audio relay ready") }
             await("Guest did not automatically decode/play relay MP3") { guest.state.value.playing && guest.state.value.positionMs > 1000 }

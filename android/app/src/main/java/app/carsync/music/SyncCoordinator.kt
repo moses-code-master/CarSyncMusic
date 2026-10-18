@@ -19,7 +19,7 @@ data class RemoteTrack(val hash: String, val title: String, val artist: String, 
 data class Car(val name: String, val role: String, val online: Boolean, val driftMs: Long?, val rttMs: Long?, val buffered: Boolean, val missing: Boolean)
 data class AppState(
     val endpoint: String = "https://carsync-music.onrender.com", val carName: String = "My car", val code: String = "", val role: String = "", val connected: Boolean = false,
-    val library: List<Track> = emptyList(), val playlists: List<SavedPlaylist> = emptyList(), val queue: List<RemoteTrack> = emptyList(), val cars: List<Car> = emptyList(),
+    val library: List<Track> = emptyList(), val playlists: List<SavedPlaylist> = emptyList(), val queue: List<RemoteTrack> = emptyList(), val cars: List<Car> = emptyList(), val maxGuests: Int = 10,
     val index: Int = 0, val positionMs: Long = 0, val playing: Boolean = false, val buffering: Boolean = false, val missing: Boolean = false,
     val clockReady: Boolean = false, val driftMs: Long? = null, val rttMs: Long = 0, val volume: Float = 0.8f,
     val guestControls: Boolean = false, val sharing: Boolean = false, val audioAvailable: Set<String> = emptySet(), val audioManifestKnown: Boolean = false, val repeat: String = "off", val driving: Boolean = false,
@@ -172,7 +172,7 @@ class SyncCoordinator(private val context: Context, val dao: LibraryDao, prefere
                 val sharingRevoked = state.value.sharing && !x.getBoolean("sharing")
                 val available = x.optJSONArray("audioAvailable")?.let { a -> (0 until a.length()).map { a.getString(it) }.toSet() } ?: emptySet()
                 val audioChanged = state.value.audioAvailable != available || state.value.sharing != x.getBoolean("sharing")
-                update { it.copy(connected = true, queue = queue, cars = cars, guestControls = x.getBoolean("guestControls"), sharing = x.getBoolean("sharing"), audioAvailable = available, audioManifestKnown = x.has("audioAvailable"), mediaProtocol = x.optInt("mediaProtocol", 1), repeat = x.getString("repeat"), message = if (!wasConnected) "Session connected. Matching clocks…" else it.message) }
+                update { it.copy(connected = true, queue = queue, cars = cars, maxGuests = x.optInt("maxGuests", 1).coerceIn(1, 50), guestControls = x.getBoolean("guestControls"), sharing = x.getBoolean("sharing"), audioAvailable = available, audioManifestKnown = x.has("audioAvailable"), mediaProtocol = x.optInt("mediaProtocol", 1), repeat = x.getString("repeat"), message = if (!wasConnected) "Session connected. Matching clocks…" else it.message) }
                 previous = x.optJSONObject("previous")?.let(::frame)
                 val f = frame(x.getJSONObject("frame"))
                 update { it.copy(requestedPlaying = f.playing) }
@@ -191,7 +191,7 @@ class SyncCoordinator(private val context: Context, val dao: LibraryDao, prefere
         val local = state.value.library.find { it.hash == remote.hash && it.mediaType == remote.mediaType }
         val relayReady = remote.mediaType == "audio" && state.value.sharing && (!state.value.audioManifestKnown || remote.hash in state.value.audioAvailable)
         val uri = if (local != null) local.uri else if (relayReady) "${state.value.endpoint}/sessions/${state.value.code}/audio/${remote.hash}" else null
-        if (uri == null) { p.pause(); p.clearMediaItems(); preparedHash = ""; update { it.copy(index = f.index, missing = true, playing = false, audioError = "", message = if (remote.mediaType == "video") "Missing matching video: ${remote.title}. Import the exact same file on this device. Video is local-only; no cloud upload." else if (it.sharing) "Waiting for the host to upload ${remote.title}. Playback will start automatically." else "Connected, but this song is not on this device. Ask the host to tap Share music with guest, or import the identical MP3.") }; return false }
+        if (uri == null) { p.pause(); p.clearMediaItems(); preparedHash = ""; update { it.copy(index = f.index, missing = true, playing = false, audioError = "", message = if (remote.mediaType == "video") "Missing matching video: ${remote.title}. Import the exact same file on this device. Video is local-only; no cloud upload." else if (it.sharing) "Waiting for the host to upload ${remote.title}. Playback will start automatically." else "Connected, but this song is not on this device. Ask the host to tap Share music with guests, or import the identical MP3.") }; return false }
         val metadata = MediaMetadata.Builder().setTitle(remote.title).setArtist(remote.artist).setAlbumTitle(remote.album).apply { local?.artPath?.let { setArtworkUri(Uri.fromFile(java.io.File(it))) } }.build()
         activeRevision = -1
         p.pause(); p.setMediaItem(MediaItem.Builder().setMediaId(remote.hash).setUri(uri).setMimeType(remote.mimeType).setMediaMetadata(metadata).build(), f.positionMs); p.prepare(); preparedHash = remote.hash
@@ -388,7 +388,7 @@ class SyncCoordinator(private val context: Context, val dao: LibraryDao, prefere
                         withContext(Dispatchers.Main) { message("Uploaded ${t.title}") }
                     }
                 }
-                message("Audio relay ready. The guest starts automatically.")
+                message("Audio relay ready. All guests start automatically.")
             } catch (e: Exception) { message(e.message ?: "Upload failed") }
             finally {
                 update { it.copy(busy = false) }
@@ -419,7 +419,7 @@ class SyncCoordinator(private val context: Context, val dao: LibraryDao, prefere
     fun leave(clearMessage: Boolean = true) {
         generation++; reconnect?.cancel(); ws?.close(1000, "Left session"); ws = null; scheduleJob?.cancel(); player?.pause(); player?.clearMediaItems(); preparedHash = ""; desired = null; activeRevision = -1; bearer = ""
         prefs.edit().remove("token").remove("code").remove("role").apply()
-        update { it.copy(code = "", role = "", connected = false, queue = emptyList(), cars = emptyList(), clockReady = false, driftMs = null, requestedPlaying = false, audioError = "", message = if (clearMessage) "Session left. Host can create a new session for two new cars." else it.message) }
+        update { it.copy(code = "", role = "", connected = false, queue = emptyList(), cars = emptyList(), clockReady = false, driftMs = null, requestedPlaying = false, audioError = "", message = if (clearMessage) "Session left. The host can create a new session for the group." else it.message) }
     }
     fun endSession() { scope.launch { try { withContext(Dispatchers.IO) { request("/sessions/${state.value.code}", "DELETE") }; leave() } catch (e: Exception) { message(e.message ?: "Could not end session") } } }
 }

@@ -27,8 +27,8 @@ class Peer {
   }
   send(type, payload = {}) { this.ws.send(JSON.stringify({ type, id: crypto.randomUUID(), ...payload })); }
 }
-async function setup(t, video = false) {
-  const dir = mkdtempSync(join(tmpdir(), 'carsync-')), app = createServer({ dataDir: dir, port: 0 }); await app.listen();
+async function setup(t, video = false, maxGuests = 10) {
+  const dir = mkdtempSync(join(tmpdir(), 'carsync-')), app = createServer({ dataDir: dir, port: 0, maxGuests }); await app.listen();
   t.after(async () => { await app.close(); rmSync(dir, { recursive: true, force: true }); });
   const url = `http://127.0.0.1:${app.server.address().port}`;
   const post = async path => { const r = await fetch(url + path, { method: 'POST', body: '{"name":"Test car"}' }); return { status: r.status, ...(await r.json()) }; };
@@ -96,8 +96,10 @@ test('audio opt-in, host-only upload, hash integrity, authenticated range stream
   assert.equal((await fetch(path, { headers: { Authorization: `Bearer ${guest.token}` } })).status, 403);
 });
 test('session capacity, missing audio and malformed playlists produce clear errors', async t => {
-  const { a, host, guest, url, post } = await setup(t);
-  assert.equal((await post(`/sessions/${host.code}/join`)).status, 409);
+  const { a, host, guest, url, post } = await setup(t, false, 2);
+  assert.equal((await post(`/sessions/${host.code}/join`)).status, 200);
+  const full = await post(`/sessions/${host.code}/join`);
+  assert.equal(full.status, 409); assert.match(full.error, /2-guest limit/);
   a.send('playlist', { playlist: [track('not-a-hash')] }); assert.match((await a.wait(x => x.type === 'error')).error, /Invalid/);
   a.send('playlist', { playlist: [track()] }); await a.wait(x => x.type === 'state' && x.playlist.length === 1);
   a.send('settings', { sharing: true }); await a.wait(x => x.type === 'state' && x.sharing);
