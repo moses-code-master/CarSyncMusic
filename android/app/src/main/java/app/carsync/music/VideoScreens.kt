@@ -52,7 +52,7 @@ private val VideoAccent = Color(0xFFB4F36D)
     val permission = rememberLauncherForActivityResult(ActivityResultContracts.RequestPermission()) { if (it) sync.scanVideos() else sync.message("Allow video access, or import with a file picker.") }
     Text("Your videos", fontSize = 30.sp)
     Text("Parked viewing only · by Brayo", color = VideoAccent)
-    Text("MP4, MKV and WebM depend on device codecs. For two screens, import the identical file on both; videos are not uploaded to the free server.")
+    Text("MP4, MKV and WebM depend on device codecs. For a group session, import the identical file on every device; videos are not uploaded to the free server.")
     Row(Modifier.horizontalScroll(rememberScrollState()), horizontalArrangement = Arrangement.spacedBy(8.dp)) {
         Button(onClick = { launchPickerSafely({ picker.launch(arrayOf("video/*", "application/x-matroska")) }, {
             fallback.launch(Intent(Intent.ACTION_GET_CONTENT).addCategory(Intent.CATEGORY_OPENABLE).setType("*/*").putExtra(Intent.EXTRA_MIME_TYPES, arrayOf("video/*", "application/x-matroska")).putExtra(Intent.EXTRA_ALLOW_MULTIPLE, true).addFlags(Intent.FLAG_GRANT_READ_URI_PERMISSION))

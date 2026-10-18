@@ -154,7 +154,7 @@ private val pages = listOf("Home", "Music Library", "Playlists", "Create Session
                             Text("YOUR ROAD. YOUR SOUND.", color = Accent, fontSize = 12.sp, fontWeight = FontWeight.Bold)
                             Text(CreatorBrand.WELCOME_CREDIT, color = Accent, fontSize = 16.sp, fontWeight = FontWeight.Medium)
                             Text("Good music.\nShared miles.", fontSize = 38.sp, lineHeight = 44.sp, fontWeight = FontWeight.Bold)
-                            Text("Play your phone’s MP3s instantly. Connect another car when you’re ready.", color = Color(0xFFCEDACD), fontSize = 18.sp)
+                            Text("Play your phone’s MP3s instantly. Share the journey with multiple guest cars.", color = Color(0xFFCEDACD), fontSize = 18.sp)
                             LargeButton("Find music on this phone", !s.busy) { scan(); page = "Music Library" }
                         } }
                         Row(Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.spacedBy(12.dp)) {
@@ -220,7 +220,7 @@ private val pages = listOf("Home", "Music Library", "Playlists", "Create Session
                         LargeButton("Build a new playlist") { editId = 0; selected = emptyList(); page = "Music Library" }
                     }
                     "Create Session" -> {
-                        Title("Lead the soundtrack", "Both cars must use the same server. A session expires after 24 hours.")
+                        Title("Lead the soundtrack", "One host and up to ${s.maxGuests} guests. Everyone uses the same server and session code. Sessions expire after 24 hours.")
                         Text("Server: ${s.endpoint.ifBlank { "Configure in Settings" }}", color = Muted)
                         LargeButton("Create session", s.code.isBlank() && !s.busy) { sync.create() }
                         LargeButton("Join another car") { page = "Join Session" }
@@ -246,6 +246,7 @@ private val pages = listOf("Home", "Music Library", "Playlists", "Create Session
                     "Now Playing" -> NowPlaying(s, sync)
                     "Connected Cars" -> {
                         Title("Travelling together", "Drift is measured against the server timeline; it does not measure speaker or Bluetooth delay.")
+                        if (s.connected) Text("${s.cars.count { it.role == "guest" && it.online }} guests online · ${s.cars.count { it.role == "guest" }}/${s.maxGuests} guest places used", color = Accent, fontSize = 20.sp)
                         s.cars.forEach { car -> Card(Modifier.fillMaxWidth()) { Column(Modifier.padding(20.dp), verticalArrangement = Arrangement.spacedBy(8.dp)) {
                             Text("${if (car.online) "●" else "○"} ${car.name}", color = if (car.online) Accent else Muted, fontSize = 26.sp)
                             Text("${car.role.uppercase()} · ${if (car.online) "Connected" else "Reconnecting / offline"}")
@@ -253,7 +254,7 @@ private val pages = listOf("Home", "Music Library", "Playlists", "Create Session
                             if (car.missing) Text("Needs matching MP3 or permitted audio relay", color = Color(0xFFFFBF7A))
                             else Text(if (car.buffered) "Audio ready" else "Preparing / buffering", color = Muted)
                         } } }
-                        if (s.cars.isEmpty()) Text("Create or join a session to see both cars.")
+                        if (s.cars.isEmpty()) Text("Create or join a session to see the host and all guests.")
                     }
                     "Settings" -> {
                         if (!s.driving) LargeButton("About CarSync Music") { page = "About" }
@@ -267,15 +268,15 @@ private val pages = listOf("Home", "Music Library", "Playlists", "Create Session
                             LargeButton("Save calibration") { sync.latency(latency.toLongOrNull() ?: 0) }
                             Text("A device with more output delay starts earlier. Compare recordings from both speakers and adjust this value while parked.", color = Muted)
                             if (s.role == "host") {
-                                SettingToggle("Guest playback controls", s.guestControls, "Allow both cars to play, pause, skip and seek.") { sync.settings(guestControls = it) }
-                                SettingToggle("I have permission to share this audio", s.sharing, "Opt in only for audio you may lawfully share. MP3s are uploaded to your server, then streamed by the guest. Revoking removes relay files.") { sync.settings(sharing = it) }
+                                SettingToggle("Guest playback controls", s.guestControls, "Allow all guests to play, pause, skip and seek for the whole session.") { sync.settings(guestControls = it) }
+                                SettingToggle("I have permission to share this audio", s.sharing, "Opt in only for audio you may lawfully share. Each MP3 uploads once to your server, then every guest can stream it. Revoking stops guest relay playback.") { sync.settings(sharing = it) }
                                 LargeButton("Upload current playlist to relay", s.sharing && !s.busy) { sync.uploadMissingAudio() }
                                 LargeButton("Export synchronization telemetry") { launchPickerSafely({ metricsExport.launch("carsync-${s.code}-metrics.csv") }) { sync.message("This device has no working file picker for saving reports.") } }
                             }
                             if (s.code.isNotBlank()) {
                                 LargeButton("Reconnect now") { sync.resume() }
                                 LargeButton("Leave session") { sync.leave() }
-                                if (s.role == "host") LargeButton("End session for both cars") { sync.endSession() }
+                                if (s.role == "host") LargeButton("End session for everyone") { sync.endSession() }
                             }
                             Text("No Google Play Services required. Intended for head units that install ordinary Android APKs; this is not an Android Auto projection app.", color = Muted)
                         }
@@ -293,11 +294,11 @@ private val pages = listOf("Home", "Music Library", "Playlists", "Create Session
     if (t == null) { Title("Ready for the road", "Import MP3s, publish a playlist, then press play."); return }
     if (s.role == "host" && !s.driving && t.mediaType == "audio") {
         if (!s.sharing) {
-            Text("Guest connected but silent? Share this playlist so the other device can stream it. Enable only for MP3s you have permission to share.", color = Muted)
-            LargeButton("Share music with guest", !s.busy) { sync.settings(sharing = true) }
-        } else Text(if (s.busy) "Sending music to the guest…" else "Audio sharing enabled · new playlist songs upload automatically", color = Accent)
+            Text("Share this playlist with all guests. Each song uploads once; guests without matching local files can stream it. Enable only for MP3s you have permission to share.", color = Muted)
+            LargeButton("Share music with guests", !s.busy) { sync.settings(sharing = true) }
+        } else Text(if (s.busy) "Preparing shared music for all guests…" else "Audio sharing enabled for all guests · new playlist songs upload automatically", color = Accent)
     }
-    if (s.role == "guest" && s.missing) Text(if (t.mediaType == "video") s.message else if (s.sharing) "Waiting for music from the host. Playback starts automatically when ready." else "Controls are connected. Ask the host to tap Share music with guest to hear this song.", color = Accent)
+    if (s.role == "guest" && s.missing) Text(if (t.mediaType == "video") s.message else if (s.sharing) "Waiting for music from the host. Playback starts automatically when ready." else "Controls are connected. Ask the host to tap Share music with guests to hear this song.", color = Accent)
     if (t.mediaType == "video") { VideoPanel(s, sync); PlaybackControls(s, sync) }
     else BoxWithConstraints {
         val wide = maxWidth > 500.dp

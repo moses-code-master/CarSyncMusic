@@ -6,7 +6,7 @@
 
 `SyncCoordinator` owns WebSocket credentials, reconnect, clock samples, staged commands, local file matching, telemetry, HTTP audio access, and UI state. Clock math is isolated in `SyncMath.kt`. Files are opened using Storage Access Framework URIs and persistable read grants; no broad storage permission or Play Services is needed.
 
-The backend owns the canonical playlist and playback timeline. It is the common rendezvous in BOTH networking modes. It accepts at most two token-authenticated cars and schedules all commands against one server time domain. A scheduled frame is persisted before broadcasting. Host identity remains stable across reconnect; disconnect does not promote the guest. Host can delegate playback controls, but never file upload or session administration.
+The backend owns the canonical playlist and playback timeline. It is the common rendezvous in BOTH networking modes. It accepts one token-authenticated host and up to ten guests by default (`MAX_GUESTS`, validated range 1–50) and schedules all commands against one server time domain. A scheduled frame is persisted before broadcasting. Host identity remains stable across reconnect; disconnect does not promote the guest. Host can delegate playback controls, but never file upload or session administration.
 
 ## Time protocol
 
@@ -57,7 +57,7 @@ Media files use `{code}-{sha256}.mp3` names under the private data directory. Up
 
 ## Trust and deployment boundary
 
-TLS terminates at Caddy. Private LAN HTTP is allowed by the Android app for hotspot use, and is vulnerable to trusted-LAN interception; public endpoints require HTTPS in the UI. Six-digit invitation codes are throttled per connecting IP, sessions hold two cars, and subsequent access uses high-entropy tokens. Limits are in-process and single-node; a production multi-tenant deployment would need stronger enrollment, durable per-user quotas, gateway abuse protection, authorization review and operational monitoring. No cloud account is provisioned or deployed by this source delivery.
+TLS terminates at Caddy. Private LAN HTTP is allowed by the Android app for hotspot use, and is vulnerable to trusted-LAN interception; public endpoints require HTTPS in the UI. Six-digit invitation codes are throttled per connecting IP, sessions hold one host and up to ten registered guests by default, and subsequent access uses high-entropy tokens. Limits are in-process and single-node; a production multi-tenant deployment would need stronger enrollment, durable per-user quotas, gateway abuse protection, authorization review and operational monitoring. The existing cloud deployment remains on the free plan.
 
 Guest audio readiness: session snapshots include an audioAvailable array containing uploaded playlist hashes only while sharing is permitted. Upload completion broadcasts a new snapshot without incrementing the playback revision. Android responds to availability changes independently of playback revisions and catches up to the authoritative timeline. The host uploads missing playlist audio automatically after its explicit sharing opt-in; guests wait instead of requesting unavailable files. Local matching MP3s continue to work without sharing.
 

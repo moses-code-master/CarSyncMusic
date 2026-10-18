@@ -2,7 +2,7 @@
 
 ## Automated checks
 
-Backend: `cd backend`, `npm ci`, `npm test`. Tests open real HTTP/WebSocket connections to ephemeral-port servers and temporary SQLite databases. They verify scheduled timing, both clients' identical frames, pause/seek/skip, duplicate protection, guest permissions, reconnect snapshots, MP3 relay integrity/ranges, missing tracks and two-car capacity. The relay fixture tests transfer integrity; it is not a playable MP3 or audio test.
+Backend: `cd backend`, `npm ci`, `npm test`. Tests open real HTTP/WebSocket connections to ephemeral-port servers and temporary SQLite databases. They verify scheduled timing, both clients' identical frames, pause/seek/skip, duplicate protection, guest permissions, reconnect snapshots, MP3 relay integrity/ranges, missing tracks and configurable multi-guest capacity. The relay fixture tests transfer integrity; it is not a playable MP3 or audio test.
 
 Android: in `android`, run `gradlew testDebugUnitTest assembleDebug`. JVM tests cover clock offsets, rejection of delay outliers, pause/play projection and bounded drift correction. Build success is a compilation check, not a hardware media test.
 
@@ -27,7 +27,7 @@ Host Settings → Export synchronization telemetry saves a CSV with each car's p
 | Wi-Fi to mobile data | Start using public HTTPS over Wi-Fi, leave its coverage with data enabled | Same server reachable; reconnect and settle. LAN-only endpoint intentionally cannot work outside LAN. |
 | Slower processor | Use older head unit / CPU-throttled emulator, cold MP3 decode | Buffering is visible; no false sync claim; late start catches up after readiness. Measure settling and drift. |
 | Identical MP3s | Import exact copies with matching SHA-256 | Relay uploads unnecessary; network usage should be metadata/status only. |
-| Guest lacks song | Remove/mismatch guest file before joining | Clear missing-song warning; guest does not play wrong track. Host Player → Share music with guest. Missing playlist audio uploads automatically and the guest starts without Retry audio; measure data and buffering. Revoke sharing and verify the remote guest stops. |
+| Guest lacks song | Remove/mismatch guest file before joining | Clear missing-song warning; guest does not play wrong track. Host Player → Share music with guests. Missing playlist audio uploads automatically and the guest starts without Retry audio; measure data and buffering. Revoke sharing and verify the remote guest stops. |
 | Host closes unexpectedly | Force-stop host while guest plays | Host silent; guest continues local/shared uploaded audio; server advances playlist; host reopening restores credentials and catches up. Also test server restart: session recovers paused. |
 | Late join | Host plays for 20 seconds, then guest joins | Clock sampling first, then projected position; no restart from zero; record convergence. |
 
@@ -38,3 +38,7 @@ Additional checks: background activity minimized for 30 minutes; screen sleep; n
 Copy `measurement-template.csv` per test run. Fill hardware/acoustic results only after measuring them. Network control tests and compiled code cannot validate real head-unit output latency. The project intentionally includes no invented physical accuracy measurements.
 
 
+
+## Multiple guests
+
+Backend group tests cover one host and three guests, shared commands, independent credentials, a fourth late join, concurrent authenticated audio reads, reconnect without displacing other guests, revocation for every guest and the default ten-guest capacity. Android instrumentation adds three simultaneous guest ExoPlayers decoding the host relay, shared pause/seek/resume, one reconnect and revocation. Physical testing still requires a host and multiple head units/phones using the same code; measure audible timing per guest separately.

@@ -9,7 +9,8 @@ import { createHash } from 'node:crypto';
 import { pathToFileURL } from 'node:url';
 import { token, digest, code, now, effective, position, schedule, validatePlaylist } from './model.mjs';
 
-export function createServer({ dataDir = process.env.DATA_DIR || './data', port = Number(process.env.PORT || 8080) } = {}) {
+export function createServer({ dataDir = process.env.DATA_DIR || './data', port = Number(process.env.PORT || 8080), maxGuests = Number(process.env.MAX_GUESTS || 10) } = {}) {
+  if (!Number.isInteger(maxGuests) || maxGuests < 1 || maxGuests > 50) throw Error('MAX_GUESTS must be an integer from 1 to 50');
   mkdirSync(dataDir, { recursive: true });
   const db = new DatabaseSync(join(dataDir, 'sessions.sqlite'));
   db.exec('PRAGMA journal_mode=WAL; CREATE TABLE IF NOT EXISTS sessions(code TEXT PRIMARY KEY, body TEXT NOT NULL)');
@@ -30,16 +31,20 @@ export function createServer({ dataDir = process.env.DATA_DIR || './data', port 
   const save = s => db.prepare('INSERT OR REPLACE INTO sessions VALUES(?,?)').run(s.code, JSON.stringify(s));
   const fail = (res, status, error) => { res.writeHead(status, { 'Content-Type': 'application/json' }); res.end(JSON.stringify({ error })); };
   const send = (ws, x) => { if (ws.readyState === WebSocket.OPEN) ws.send(JSON.stringify(x)); };
+  const cars = s => s.members.map(m => ({ id: m.id, name: m.name, role: m.role, online: peers.has(m.id), ...(peers.get(m.id)?.status || {}) }));
   function snapshot(s) {
-    return { type: 'state', mediaProtocol: 2, code: s.code, playlist: s.playlist, audioAvailable: s.sharing ? s.playlist.filter(t => t.mediaType !== 'video' && existsSync(join(dataDir, `${s.code}-${t.hash}.mp3`))).map(t => t.hash) : [], frame: s.frame, previous: s.previous, repeat: s.repeat, sharing: s.sharing, guestControls: s.guestControls, expiresAt: s.expiresAt, serverNow: now(), cars: s.members.map(m => ({ id: m.id, name: m.name, role: m.role, online: peers.has(m.id), ...(peers.get(m.id)?.status || {}) })) };
+    return { type: 'state', mediaProtocol: 2, maxGuests, code: s.code, playlist: s.playlist, audioAvailable: s.sharing ? s.playlist.filter(t => t.mediaType !== 'video' && existsSync(join(dataDir, `${s.code}-${t.hash}.mp3`))).map(t => t.hash) : [], frame: s.frame, previous: s.previous, repeat: s.repeat, sharing: s.sharing, guestControls: s.guestControls, expiresAt: s.expiresAt, serverNow: now(), cars: cars(s) };
   }
-  const broadcast = s => s.members.forEach(m => {
-    const p = peers.get(m.id); if (!p) return;
-    if (s.playlist.some(t => t.mediaType === 'video') && !p.video) { p.ws.close(4003, 'Video sessions require CarSync 1.5+. Update both devices.'); return; }
-    send(p.ws, snapshot(s));
-  });
+  const broadcast = s => {
+    const state = snapshot(s), video = s.playlist.some(t => t.mediaType === 'video');
+    s.members.forEach(m => {
+      const p = peers.get(m.id); if (!p) return;
+      if (video && !p.video) { p.ws.close(4003, 'Video sessions require CarSync 1.5+. Update the host and every guest.'); return; }
+      send(p.ws, state);
+    });
+  };
   const broadcastCars = s => {
-    const msg = { type: 'cars', cars: snapshot(s).cars, serverNow: now() };
+    const msg = { type: 'cars', cars: cars(s), serverNow: now() };
     s.members.forEach(m => { const p = peers.get(m.id); if (p) send(p.ws, msg); });
   };
   function auth(req, sessionCode) {
@@ -75,10 +80,10 @@ export function createServer({ dataDir = process.env.DATA_DIR || './data', port 
       if (!match) return fail(res, 404, 'Not found');
       const [, c, route, hash] = match;
       if (route === 'join' && req.method === 'POST') {
-        if (limited(req.socket.remoteAddress + ':join', 10)) return fail(res, 429, 'Too many join attempts; retry in a minute');
         const b = await json(req), s = sessions.get(c);
+        if (s && s.expiresAt > now() && s.members.filter(m => m.role === 'guest').length >= maxGuests) return fail(res, 409, `Session has reached its ${maxGuests}-guest limit. Resume with the original device or ask the host to create a new session.`);
+        if (limited(req.socket.remoteAddress + ':join', 10)) return fail(res, 429, 'Too many join attempts; retry in a minute');
         if (!s || s.expiresAt < now()) return fail(res, 404, 'Session expired or code incorrect');
-        if (s.members.length >= 2) return fail(res, 409, 'Session already has two cars. Resume with the original device or create a new session.');
         const raw = token(), member = { id: token(), name: String(b.name || 'Guest car').slice(0, 40), role: 'guest', tokenHash: digest(raw) };
         s.members.push(member); save(s); broadcast(s); res.setHeader('Content-Type', 'application/json'); res.end(JSON.stringify({ code: c, token: raw, memberId: member.id, role: member.role })); return;
       }
