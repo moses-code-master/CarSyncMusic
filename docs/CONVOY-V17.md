@@ -1,16 +1,16 @@
 # CarSync Convoy v1.7 — experimental branch
 
-This branch adds a prototype PTT PCM relay, floor arbitration, optional GPS publishing, client-side LAN discovery and guest queue voting.
+This branch adds a prototype PTT PCM relay, floor arbitration, foreground-service opt-in GPS publishing, local DNS-SD advertisement and discovery, separation calculation, and guest voting.
 
 ## Known constraints
 
 - Do **not** treat this branch as a production release until the Android build, Node.js tests and physical head-unit acceptance tests pass.
-- PTT uses PCM16 at 16 kHz over authenticated WebSockets, not Opus. The microphone starts only while the foreground player UI has permission and the server grants the floor. Do not rely on PTT as an emergency communication device. Use stop-talking to release the floor. A server lease expires after 8 seconds without frames. The Android implementation uses start/stop controls rather than press-and-hold.
-- Location is explicitly opt-in and is broadcast only to authenticated members in the same session. The backend retains the latest reported location in memory, not SQLite. GPS foreground-service and background location support are **not** implemented. Position reporting while Android stops the activity may be unreliable.
-- The radar UI currently toggles sharing but does not render geographic distances or gap alerts.
-- LAN discovery finds a service only if an existing relay registers the _carsync._tcp. service. The current Node backend does not advertise this service, and Android does not host a local relay. Discovery is **not** automatic pairing yet.
+- PTT uses PCM16 at 16 kHz over authenticated WebSockets, not Opus. The microphone foreground service starts from a visible, permission-granted user action, and capture begins only after the server grants the floor. Do not rely on PTT as an emergency communication device. Use stop-talking to release the floor. A server lease expires after 8 seconds without frames. The Android implementation uses start/stop controls rather than press-and-hold.
+- Location is opt-in and shared only with authenticated members of the same session. The backend holds live observations in memory, not SQLite, and hides stale coordinates. Android now uses a user-started location foreground service with a visible notification and stops it on session loss or exit. Background permission is not requested. Test OEM battery optimizations and notification permission behavior on physical car units.
+- The radar UI now displays straight-line separation for two consenting participants with fresh GPS fixes, and labels gaps greater than 2.5 km. It does not know the road route, reliably determine who is ahead, or send push alerts.
+- LAN discovery finds an external Node relay that advertises _carsync._tcp. Enable server-side advertising **only on a trusted local network** with `CARSYNC_LAN_DISCOVERY=1 npm start`; the app shows the discovered URL for explicit user review before saving. On older Android, multicast receive permissions are requested at installation. Android still does not host a local relay or join automatically; a Node server must be running on the LAN.
 - Cabin-versus-convoy transports have not been split. The cloud relay remains the common synchronization authority in both LAN and internet modes.
-- This update does not implement acoustic chirp calibration, native Opus, guest-supplied file transfer, or TLS pinning.
+- This update does not implement acoustic chirp calibration, native Opus, guest-supplied file transfer, self-hosting on an Android head unit, synchronized visualizer, or local TLS pinning. These require separate implementation and device tests.
 - Global usesCleartextTraffic=true remains enabled for existing LAN HTTP support; do not use an untrusted LAN for sensitive audio or location data.
 - Physical output delay and Android system volume vary across head units. Verify music is not interrupted when speech begins or ends.
 - Voting applies to the upcoming queue, keeps the current track in place and only accepts authenticated session members. A single vote per user toggles on repeated selection.
