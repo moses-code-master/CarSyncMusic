@@ -58,7 +58,7 @@ export function createServer({ dataDir = process.env.DATA_DIR || './data', port 
   for (const f of readdirSync(dataDir)) if (/^\d{6}-[a-f0-9]{64}\.[A-Za-z0-9_-]+\.tmp$/.test(f)) unlinkSync(join(dataDir, f));
   const save = s => db.prepare('INSERT OR REPLACE INTO sessions VALUES(?,?)').run(s.code, JSON.stringify(s));
   const fail = (res, status, error) => { res.writeHead(status, { 'Content-Type': 'application/json' }); res.end(JSON.stringify({ error })); };
-  const send = (ws, x) => { if (ws.readyState === WebSocket.OPEN) ws.send(JSON.stringify(x)); };
+  const send = (ws, x) => { if (ws?.readyState === WebSocket.OPEN) ws.send(JSON.stringify(x)); };
   const cars = s => s.members.map(m => {
     const peer = peers.get(m.id);
     const livePosition = peer?.location && now() - peer.location.at < 10000 ? peer.location : null;
