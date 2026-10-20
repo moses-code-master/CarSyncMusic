@@ -78,3 +78,26 @@ The dedicated **CAR-TO-CAR INTERCOM** appears on Home and Now Playing even with 
 Guests may select several MP3s in Music Library or multiple MP4 videos on the Videos page and submit them sequentially. The host must enable sharing and guest contributions. Accepted files must be at most **100 MB each**, with no more than **500 session playlist entries**, an overall **2 GB relay storage budget** and a per-guest submission rate limit; therefore uploads are **not literally unlimited**. The server verifies SHA-256 content and only appends each item after successful upload. Only `video/mp4` is supported for remote video streaming. MKV and WebM remain local-only. Playback on a screen requires parked confirmation and respects driving restrictions; audio may continue where supported.
 
 The beta app and companion test backend must both be updated to this feature branch. The existing stable backend and Android release remain untouched. Because the staging server is on Render's free plan and has no persistent volume, uploaded media and sessions may be lost on a restart or redeploy. Actual head-unit microphone/speaker behavior still requires a two-phone or two-head-unit test; green CI alone does not guarantee functional in-car PTT.
+
+
+## v1.8 beta 1 — cloud-first convoy reliability
+
+This branch is **Phase 1 development**, not a production release and not an implementation of the complete v2.0 roadmap.
+
+- The Home dashboard reports the user's convoy/session status, currently online cars, whether the saved server is cloud or a local Wi-Fi relay, and measured network round-trip delay. This helps diagnose slow synchronization. It does **not** provide a live route map.
+- Settings labels "Find local Wi-Fi relay" as a tool for finding a *running laptop/Node relay on the same Wi-Fi*, **not nearby cars**. Search lasts 10 seconds and shows a useful explanation if no relay is found. The public Render endpoint works across distances over mobile data without local discovery.
+- Android WebSocket handling now responds to both closing and closed callbacks, displays retry status, stops private-location and microphone services on network loss, and attempts exponential reconnect. Music already on a device may continue while the data connection is interrupted; live coordination and the intercom require the network.
+- An intercom request now has an explicit pending state and 6.5-second timeout. Timeouts, denial, server error or disconnect release the microphone foreground service so a user can retry. The backend confirms an existing user's floor when they retry and reports rate-limit denial as a `ptt_denied` event instead of a generic error.
+- Updated the emulator regression assertion to the new actionable missing-video guidance, which changed when authenticated MP4 relay was introduced.
+
+### Physical acceptance tests before publishing
+
+1. Test on two *different* Android phones or head units (Android 6–15), both using the **same** current beta client and matching staging backend.
+2. Join a cloud session over two different mobile data providers; test guest-to-host and host-to-guest talk, audio routing, permission denial, turn taking and silence for longer than eight seconds.
+3. Disconnect mobile data mid-song and mid-PTT, restore coverage, confirm session reconnects, microphone foreground notification closes on loss, and the shared playlist/time position recovers.
+4. Test Bluetooth and head-unit speaker delays separately (app clock sync does not guarantee acoustic sync).
+5. Test "Find local Wi-Fi relay" with **no** relay (must report none) and separately with Node backend advertising `CARSYNC_LAN_DISCOVERY=1` on a trusted LAN.
+6. Confirm MP4 picture remains blocked while driving. Test playback of locally cached audio during weak coverage.
+7. Load-test the target convoy size; server currently defaults to one host plus ten guests. No claim of successful 20–50-car operation without load testing.
+
+Do not merge or deploy this branch until required GitHub checks and physical tests pass; maintain the live production server separately.
