@@ -447,6 +447,10 @@ private val pages = listOf("Home", "Music Library", "Playlists", "Create Session
                         }
                         Text("Bluetooth call routing is attempted only while another car is speaking or you are talking; it is restored afterward. Requires a Bluetooth call-capable headset and permission. Some stereos cannot provide a Bluetooth call microphone.", color = Muted, fontSize = 12.sp)
                         Text("This is a test radio, not an emergency service. Never change routing settings while driving.", color = Muted, fontSize = 12.sp)
+                        Title("Music playback quality", "Audio should play continuously. CarSync avoids frequent seeks and only corrects large persistent drift.")
+                        Text("Playback: ${s.syncCorrectionStatus}", color = Muted, fontSize = 12.sp)
+                        Text("Unexpected rebuffer events: ${s.audioRebuffers} · large sync recoveries: ${s.syncHardSeeks}", color = if (s.audioRebuffers > 0 || s.syncHardSeeks > 1) Color(0xFFFFBF7A) else Accent, fontSize = 12.sp)
+                        Text("If a song scratches, check whether rebuffer events increase. Compare local MP3 playback with internet-shared audio and try the normal audio route with Bluetooth call mode OFF.", color = Muted, fontSize = 12.sp)
                         Title("Setup & playback", "Use HTTPS for mobile data. Use a private Wi-Fi server address on a shared hotspot.")
                         SettingToggle("Driving mode", s.driving, "Hides library, session setup and complex controls. Park before disabling; automatic vehicle-speed detection is unavailable.") { sync.driving(it); if (it) page = "Now Playing" }
                         if (!s.driving) {

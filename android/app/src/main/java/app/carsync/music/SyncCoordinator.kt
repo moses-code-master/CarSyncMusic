@@ -29,7 +29,7 @@ data class AppState(
     val guestControls: Boolean = false, val sharing: Boolean = false, val guestAdditions: Boolean = false, val serverFeatures: Set<String> = emptySet(), val pendingGuestSong: String = "", val pendingGuestSongs: List<String> = emptyList(), val audioAvailable: Set<String> = emptySet(), val audioManifestKnown: Boolean = false, val repeat: String = "off", val driving: Boolean = false,
     val latencyMs: Long = 0, val message: String = "Import MP3s and create or join a session.", val busy: Boolean = false,
     val invitationCode: String = "", val invitationServer: String = "", val serviceReady: Boolean = false, val requestedPlaying: Boolean = false, val audioError: String = "",
-    val parkedConfirmed: Boolean = false, val audioOnlyVideo: Boolean = false, val automotive: Boolean = false, val vehicleKnown: Boolean = false, val vehicleRestricted: Boolean = false, val mediaProtocol: Int = 1, val preferBluetoothRadio: Boolean = false, val radioStatus: String = "Waiting for a radio connection", val acousticProbeMs: Long? = null, val acousticVariationMs: Long? = null, val acousticProfileReliable: Boolean = false
+    val parkedConfirmed: Boolean = false, val audioOnlyVideo: Boolean = false, val automotive: Boolean = false, val vehicleKnown: Boolean = false, val vehicleRestricted: Boolean = false, val mediaProtocol: Int = 1, val syncCorrectionStatus: String = "Steady", val syncHardSeeks: Int = 0, val audioRebuffers: Int = 0, val preferBluetoothRadio: Boolean = false, val radioStatus: String = "Waiting for a radio connection", val acousticProbeMs: Long? = null, val acousticVariationMs: Long? = null, val acousticProfileReliable: Boolean = false
 ) {
     val canControl get() = role == "host" || role == "local" || guestControls
     val supportsVoice get() = "convoy_ptt_pcm16_v1" in serverFeatures
@@ -337,7 +337,8 @@ class SyncCoordinator(private val context: Context, val dao: LibraryDao, prefere
     private var endedRevision = -1L
     private var playPublishedHash: String? = null
     private var lastStatus = 0L
-    private var lastHardSeek = 0L
+    private val continuity = PlaybackContinuityGuard()
+    private var hasPlayedCurrentTrack = false
     private val pings = mutableSetOf<Double>()
     private fun localNow() = SystemClock.elapsedRealtime().toDouble()
     private fun serverNow() = localNow() + clock.offsetMs
@@ -358,7 +359,7 @@ class SyncCoordinator(private val context: Context, val dao: LibraryDao, prefere
         scope.launch { dao.observePlaylists().collect { list -> update { it.copy(playlists = list) } } }
     }
     fun attach(p: ExoPlayer) {
-        player = p; preparedHash = ""; activeRevision = -1; p.volume = 1f; refreshVideoOutput()
+        player = p; preparedHash = ""; activeRevision = -1; continuity.reset(); hasPlayedCurrentTrack = false; p.volume = 1f; refreshVideoOutput()
         val audio = context.getSystemService(Context.AUDIO_SERVICE) as android.media.AudioManager
         update { it.copy(serviceReady = true, volume = audio.getStreamVolume(android.media.AudioManager.STREAM_MUSIC).toFloat() / audio.getStreamMaxVolume(android.media.AudioManager.STREAM_MUSIC).coerceAtLeast(1)) }
         p.addListener(object : Player.Listener {
@@ -367,7 +368,15 @@ class SyncCoordinator(private val context: Context, val dao: LibraryDao, prefere
                 val detail = "Cannot play this ${if (state.value.track?.mediaType == "video") "video/codec" else "file"}: ${error.errorCodeName}. ${error.cause?.message.orEmpty()}. ${if (state.value.track?.mediaType == "video") "Try MP4 H.264/AAC or audio-only mode; codecs depend on the device." else "Try reimporting it or use Scan phone."}"
                 update { it.copy(audioError = detail, message = detail, requestedPlaying = false) }
             }
+            override fun onIsPlayingChanged(isPlaying: Boolean) {
+                if (isPlaying) hasPlayedCurrentTrack = true
+            }
             override fun onPlaybackStateChanged(playbackState: Int) {
+                if (playbackState == Player.STATE_BUFFERING && hasPlayedCurrentTrack &&
+                    state.value.requestedPlaying && !state.value.missing) {
+                    update { it.copy(audioRebuffers = it.audioRebuffers + 1,
+                        syncCorrectionStatus = "Buffering — check mobile data or song source") }
+                }
                 if (playbackState == Player.STATE_READY && clock.ready) desired?.let { if (serverNow() >= it.executeAt) apply(it) }
                 if (playbackState == Player.STATE_ENDED) {
                     if (state.value.role == "local") { if (state.value.index < state.value.queue.lastIndex) command("next") else update { it.copy(requestedPlaying = false) }; return }
@@ -561,6 +570,7 @@ class SyncCoordinator(private val context: Context, val dao: LibraryDao, prefere
         if (uri == null) { p.pause(); p.clearMediaItems(); preparedHash = ""; update { it.copy(index = f.index, missing = true, playing = false, audioError = "", message = if (remote.mediaType == "video") "Missing video: ${remote.title}. Request MP4 sharing or import the matching file." else if (it.sharing) "Waiting for the host to upload ${remote.title}. Playback will start automatically." else "Connected, but this song is not on this device. Ask the host to tap Share music with guests, or import the identical MP3.") }; return false }
         val metadata = MediaMetadata.Builder().setTitle(remote.title).setArtist(remote.artist).setAlbumTitle(remote.album).apply { local?.artPath?.let { setArtworkUri(Uri.fromFile(java.io.File(it))) } }.build()
         activeRevision = -1
+        continuity.reset(); hasPlayedCurrentTrack = false
         p.pause(); p.setMediaItem(MediaItem.Builder().setMediaId(remote.hash).setUri(uri).setMimeType(remote.mimeType).setMediaMetadata(metadata).build(), f.positionMs); p.prepare(); preparedHash = remote.hash
         update { it.copy(missing = false, index = f.index, audioError = "") }; return true
     }
@@ -582,7 +592,12 @@ class SyncCoordinator(private val context: Context, val dao: LibraryDao, prefere
         val target = f.target(serverNow(), state.value.latencyMs).coerceAtMost(state.value.queue.getOrNull(f.index)?.durationMs ?: Long.MAX_VALUE)
         // Apply a command once. Seeking again on every READY callback can keep a
         // slow video decoder buffering forever. Once playing, tick() corrects drift.
-        if (activeRevision != f.revision) { p.seekTo(target); activeRevision = f.revision; p.playbackParameters = PlaybackParameters(1f) }
+        if (activeRevision != f.revision) {
+            continuity.reset()
+            p.seekTo(target)
+            activeRevision = f.revision
+            if (p.playbackParameters.speed != 1f) p.playbackParameters = PlaybackParameters(1f)
+        }
         p.playWhenReady = f.playing
         update { it.copy(index = f.index, message = if (clock.rttMs > 500) "High network delay: synchronization may be less accurate." else "Following synchronized playback") }
     }
@@ -601,8 +616,17 @@ class SyncCoordinator(private val context: Context, val dao: LibraryDao, prefere
             val target = f.target(serverNow(), state.value.latencyMs).coerceAtMost(state.value.queue.getOrNull(f.index)?.durationMs ?: Long.MAX_VALUE)
             error = target - p.currentPosition
             if (f.playing && p.isPlaying) {
-                if (abs(error) > 300 && SystemClock.elapsedRealtime() - lastHardSeek > 1500) { p.seekTo(target); lastHardSeek = SystemClock.elapsedRealtime(); p.playbackParameters = PlaybackParameters(1f) }
-                else p.playbackParameters = PlaybackParameters(if (abs(error) > 35) driftSpeed(error) else 1f)
+                val decision = continuity.next(error, SystemClock.elapsedRealtime(), state.value.speakerId != null)
+                if (decision.hardSeek) {
+                    p.seekTo(target)
+                    if (p.playbackParameters.speed != 1f) p.playbackParameters = PlaybackParameters(1f)
+                    update { it.copy(syncHardSeeks = it.syncHardSeeks + 1,
+                        syncCorrectionStatus = "Recovered persistent large time gap") }
+                } else if (decision.speed != null && abs(p.playbackParameters.speed - decision.speed) > 0.0005f) {
+                    p.playbackParameters = PlaybackParameters(decision.speed)
+                    update { it.copy(syncCorrectionStatus = if (decision.speed == 1f) "Steady" else
+                        "Gentle synchronization correction") }
+                }
             }
         }
         update { it.copy(positionMs = p.currentPosition, playing = p.isPlaying, buffering = p.playbackState == Player.STATE_BUFFERING, driftMs = error) }
@@ -683,7 +707,9 @@ class SyncCoordinator(private val context: Context, val dao: LibraryDao, prefere
     fun volume(v: Float) {
         val audio = context.getSystemService(Context.AUDIO_SERVICE) as android.media.AudioManager
         audio.setStreamVolume(android.media.AudioManager.STREAM_MUSIC, (v * audio.getStreamMaxVolume(android.media.AudioManager.STREAM_MUSIC)).toInt(), 0)
-        player?.volume = if (state.value.speakerId != null) 0.2f else 1f; update { it.copy(volume = v) }
+        // The volume slider sets Android media stream volume.
+        // Keep ExoPlayer gain untouched so intercom ducking can fade smoothly.
+        update { it.copy(volume = v) }
     }
     fun driving(v: Boolean) {
         if (!v && SystemClock.elapsedRealtime() - recentMovingAtMs < 15000L) {
