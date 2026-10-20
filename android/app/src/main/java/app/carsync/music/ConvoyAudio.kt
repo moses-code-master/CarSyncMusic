@@ -128,6 +128,7 @@ class ConvoyAudio(
             record = null
         }
         val capture = record ?: return false
+        bluetoothRoute.routeMicrophone(capture)
         applyVoiceProcessing(capture)
         microphone = capture
         recording = true
