@@ -90,18 +90,20 @@ class SyncCoordinator(private val context: Context, val dao: LibraryDao, prefere
         update { it.copy(radarEnabled = started) }
     }
     fun pttRequest() {
-        if (!state.value.connected) return
+        if (!state.value.connected) { message("Join a session first to talk with another car."); return }
+        if (state.value.speakerId != null) { message("Intercom is busy. Release the current speaker first."); return }
         if (!state.value.supportsVoice) { message("Intercom needs the newer convoy server. Update your Render deployment or use the matching local backend."); return }
         if (!ConvoyForeground.startMicrophone(context)) {
             message("Microphone service could not start. Open CarSync and try again.")
             return
         }
-        ws?.send(JSONObject().put("type", "ptt_request").toString())
+        if (ws?.send(JSONObject().put("type", "ptt_request").toString()) != true) { ConvoyForeground.stopMicrophone(context); message("Intercom connection unavailable. Reconnect and retry.") } else message("Requesting talk channel…")
     }
     fun pttRelease() {
         convoyAudio.stopCapture()
         ConvoyForeground.stopMicrophone(context)
         ws?.send(JSONObject().put("type", "ptt_release").toString())
+        message("Releasing talk channel…")
     }
     fun voteTrack(hash: String) {
         if ("convoy_votes_v1" in state.value.serverFeatures && state.value.connected)
@@ -316,8 +318,9 @@ class SyncCoordinator(private val context: Context, val dao: LibraryDao, prefere
                 if (hash.isNotBlank() && state.value.pendingGuestSong == hash) uploadGuestSong(hash)
             }
             "ptt_start" -> {
-                update { it.copy(speakerId = x.optString("speakerId")) }
+                update { it.copy(speakerId = if (x.isNull("speakerId")) null else x.optString("speakerId")) }
                 convoyAudio.duck(true)
+                message(if (x.optString("speakerId") == state.value.memberId) "Microphone granted. Talking to other cars." else "Listening to another car…")
                 // Capture only after the server explicitly grants the speaking floor.
                 if (x.optString("speakerId") == state.value.memberId && !convoyAudio.beginCapture()) {
                     ConvoyForeground.stopMicrophone(context)
@@ -329,6 +332,7 @@ class SyncCoordinator(private val context: Context, val dao: LibraryDao, prefere
                 if (state.value.speakerId == state.value.memberId) ConvoyForeground.stopMicrophone(context)
                 convoyAudio.close()
                 update { it.copy(speakerId = null) }
+                message("Intercom ready. Tap Start talking.")
             }
             "ptt_pcm" -> convoyAudio.receive(x.getString("data"))
             "ptt_denied" -> {
@@ -355,7 +359,7 @@ class SyncCoordinator(private val context: Context, val dao: LibraryDao, prefere
                 val sharingRevoked = state.value.sharing && !x.getBoolean("sharing")
                 val available = x.optJSONArray("audioAvailable")?.let { a -> (0 until a.length()).map { a.getString(it) }.toSet() } ?: emptySet()
                 val audioChanged = state.value.audioAvailable != available || state.value.sharing != x.getBoolean("sharing")
-                update { it.copy(connected = true, queue = queue, cars = cars, maxGuests = x.optInt("maxGuests", 1).coerceIn(1, 50), guestControls = x.getBoolean("guestControls"), guestAdditions = x.optBoolean("guestAdditions", false), serverFeatures = advertised, speakerId = x.optString("speakerId").takeIf { name -> name.isNotBlank() }, votes = x.optJSONObject("votes")?.let { obj -> obj.keys().asSequence().associateWith { key -> obj.optInt(key) } } ?: emptyMap(), sharing = x.getBoolean("sharing"), audioAvailable = available, audioManifestKnown = x.has("audioAvailable"), mediaProtocol = x.optInt("mediaProtocol", 1), repeat = x.getString("repeat"), message = if (!wasConnected) "Session connected. Matching clocks…" else it.message) }
+                update { it.copy(connected = true, queue = queue, cars = cars, maxGuests = x.optInt("maxGuests", 1).coerceIn(1, 50), guestControls = x.getBoolean("guestControls"), guestAdditions = x.optBoolean("guestAdditions", false), serverFeatures = advertised, speakerId = if (x.isNull("speakerId")) null else x.optString("speakerId").takeIf { name -> name.isNotBlank() && name != "null" }, votes = x.optJSONObject("votes")?.let { obj -> obj.keys().asSequence().associateWith { key -> obj.optInt(key) } } ?: emptyMap(), sharing = x.getBoolean("sharing"), audioAvailable = available, audioManifestKnown = x.has("audioAvailable"), mediaProtocol = x.optInt("mediaProtocol", 1), repeat = x.getString("repeat"), message = if (!wasConnected) "Session connected. Matching clocks…" else it.message) }
                 if (!wasConnected && "convoy_ptt_pcm16_v1" !in advertised) {
                     message("Connected to an older server: intercom, GPS, voting and guest songs need the v1.7 backend.")
                 }
