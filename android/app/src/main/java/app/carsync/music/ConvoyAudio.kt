@@ -41,6 +41,19 @@ class ConvoyAudio(
     private var gain: AutomaticGainControl? = null
     private var originalVolume: Float? = null
     private var duckAnimator: ValueAnimator? = null
+    private val bluetoothRoute = BluetoothRadioRoute(context, status)
+    private var preferBluetoothRadio = false
+
+    fun configureBluetoothRadio(enabled: Boolean) {
+        preferBluetoothRadio = enabled
+        if (!enabled) bluetoothRoute.release()
+    }
+
+    fun beginVoiceSession() {
+        bluetoothRoute.begin(preferBluetoothRadio)
+    }
+
+    fun endCallRoute() { bluetoothRoute.release() }
     private val rate = 16000
     private val pcmBytes = ConvoyVoiceCodec.PCM_BYTES
     private val queue = ArrayBlockingQueue<ByteArray>(18)
@@ -115,6 +128,7 @@ class ConvoyAudio(
             record = null
         }
         val capture = record ?: return false
+        bluetoothRoute.routeMicrophone(capture)
         applyVoiceProcessing(capture)
         microphone = capture
         recording = true
@@ -186,7 +200,8 @@ class ConvoyAudio(
             val track = try {
                 AudioTrack.Builder()
                     .setAudioAttributes(AudioAttributes.Builder()
-                        .setUsage(AudioAttributes.USAGE_MEDIA)
+                        .setUsage(if (bluetoothRoute.isCallAudioActive())
+                            AudioAttributes.USAGE_VOICE_COMMUNICATION else AudioAttributes.USAGE_MEDIA)
                         .setContentType(AudioAttributes.CONTENT_TYPE_SPEECH).build())
                     .setAudioFormat(AudioFormat.Builder()
                         .setEncoding(AudioFormat.ENCODING_PCM_16BIT)
@@ -233,5 +248,6 @@ class ConvoyAudio(
     fun close() {
         stopCapture()
         stopPlayback()
+        bluetoothRoute.release()
     }
 }
