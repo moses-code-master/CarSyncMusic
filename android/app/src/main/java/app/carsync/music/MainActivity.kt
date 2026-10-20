@@ -254,31 +254,41 @@ private val pages = listOf("Home", "Music Library", "Playlists", "Create Session
                         if (s.connected) {
                             Text("Convoy Intercom", fontSize = 22.sp, fontWeight = FontWeight.Bold)
                             Text(if (s.speakerId != null) "Speaker active" else "Channel available", color = Muted)
-                            LargeButton("Start talking", s.speakerId == null) {
+                            LargeButton("Start talking", s.speakerId == null && !s.driving) {
                                 if (ContextCompat.checkSelfPermission(context, Manifest.permission.RECORD_AUDIO) ==
                                     android.content.pm.PackageManager.PERMISSION_GRANTED) sync.pttRequest()
                                 else microphoneRequest.launch(Manifest.permission.RECORD_AUDIO)
                             }
                             LargeButton("Stop talking") { sync.pttRelease() }
                             Text("Only use interactive intercom controls while parked or as a passenger.", color = Muted)
-                            Text("Vote for an upcoming song", fontSize = 18.sp)
-                            s.queue.drop(s.index + 1).forEach { track ->
-                                LargeButton("${track.title} · ${s.votes[track.hash] ?: 0} votes") { sync.voteTrack(track.hash) }
+                            if (!s.driving) {
+                                Text("Vote for an upcoming song", fontSize = 18.sp)
+                                s.queue.drop(s.index + 1).forEach { track ->
+                                    LargeButton("${track.title} · ${s.votes[track.hash] ?: 0} votes") { sync.voteTrack(track.hash) }
+                                }
                             }
                         }
                     }
                     "Connected Cars" -> {
                         Title("Travelling together", "Drift is measured against the server timeline; it does not measure speaker or Bluetooth delay.")
                         if (s.connected) Text("${s.cars.count { it.role == "guest" && it.online }} guests online · ${s.cars.count { it.role == "guest" }}/${s.maxGuests} guest places used", color = Accent, fontSize = 20.sp)
+                        val ownPosition = s.cars.find { it.memberId == s.memberId }?.location
                         s.cars.forEach { car -> Card(Modifier.fillMaxWidth()) { Column(Modifier.padding(20.dp), verticalArrangement = Arrangement.spacedBy(8.dp)) {
                             Text("${if (car.online) "●" else "○"} ${car.name}", color = if (car.online) Accent else Muted, fontSize = 26.sp)
                             Text("${car.role.uppercase()} · ${if (car.online) "Connected" else "Reconnecting / offline"}")
                             Text("Player drift: ${car.driftMs?.let { "$it ms" } ?: "Measuring"} · network RTT: ${car.rttMs?.let { "$it ms" } ?: "—"}", color = Muted)
+                            if (car.memberId != s.memberId) {
+                                val distance = ConvoyGeometry.separationMeters(ownPosition, car.location, System.currentTimeMillis())
+                                if (distance != null) {
+                                    Text("Straight-line separation: ${ConvoyGeometry.label(distance)}", color = if (ConvoyGeometry.alert(distance)) Color(0xFFFFBF7A) else Accent)
+                                    if (ConvoyGeometry.alert(distance)) Text("Convoy gap above 2.5 km. Check your agreed meeting point.", color = Color(0xFFFFBF7A))
+                                } else Text("Gap unavailable until both vehicles share accurate GPS.", color = Muted)
+                            }
                             if (car.missing) Text("Needs matching MP3 or permitted audio relay", color = Color(0xFFFFBF7A))
                             else Text(if (car.buffered) "Audio ready" else "Preparing / buffering", color = Muted)
                         } } }
                         if (s.cars.isEmpty()) Text("Create or join a session to see the host and all guests.")
-                        LargeButton(if (s.radarEnabled) "Stop location sharing" else "Share live convoy location") {
+                        LargeButton(if (s.radarEnabled) "Stop location sharing" else "Share live convoy location", s.connected && (!s.driving || s.radarEnabled)) {
                             if (s.radarEnabled) sync.toggleRadar(false)
                             else if (ContextCompat.checkSelfPermission(context, Manifest.permission.ACCESS_FINE_LOCATION) ==
                                 android.content.pm.PackageManager.PERMISSION_GRANTED ||
