@@ -167,6 +167,7 @@ private val pages = listOf("Home", "Music Library", "Playlists", "Create Session
                             Text("Play your phone’s MP3s instantly. Share the journey with multiple guest cars.", color = Color(0xFFCEDACD), fontSize = 18.sp)
                             LargeButton("Find music on this phone", !s.busy) { scan(); page = "Music Library" }
                         } }
+                        ConvoyOverview(s, { page = "Connected Cars" }, { page = "Create Session" })
                         Row(Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.spacedBy(12.dp)) {
                             Stat("LIBRARY", "${s.library.count { it.mediaType == "audio" }} tracks", Modifier.weight(1f)); Stat("SESSION", if (s.code.isBlank()) "Ready to connect" else s.code, Modifier.weight(1f))
                         }
@@ -311,7 +312,10 @@ private val pages = listOf("Home", "Music Library", "Playlists", "Create Session
                     "Settings" -> {
                         if (!s.driving) LargeButton("About CarSync Music") { page = "About" }
                         if (!s.driving) {
-                            LargeButton("Find nearby CarSync server") { sync.beginDiscovery() }
+                            Text("Internet convoy: cars anywhere with mobile data use the saved cloud server. Local Wi-Fi discovery only searches for a separately running laptop relay; it cannot find cars.", color = Muted)
+                            LargeButton(if (s.localSearchActive) "Searching local Wi-Fi…" else "Find local Wi-Fi relay (optional)", !s.localSearchActive) { sync.beginDiscovery() }
+                            if (s.localSearchStatus.isNotBlank()) Text(s.localSearchStatus, color = Muted)
+                            if (s.localSearchActive) LargeButton("Stop Wi-Fi relay scan") { sync.stopDiscovery() }
                             if (s.discoveredServer.isNotBlank()) {
                                 Text("Nearby server: ${s.discoveredServer}", color = Accent)
                                 LargeButton("Use discovered server", s.code.isBlank()) {
@@ -359,6 +363,27 @@ private val pages = listOf("Home", "Music Library", "Playlists", "Create Session
     }
 }
 
+@Composable private fun ConvoyOverview(s: AppState, openCars: () -> Unit, openSession: () -> Unit) {
+    val online = s.cars.count { it.online }
+    val total = s.cars.size
+    Card(colors = CardDefaults.cardColors(containerColor = Panel), shape = RoundedCornerShape(20.dp)) {
+        Column(Modifier.fillMaxWidth().padding(16.dp), verticalArrangement = Arrangement.spacedBy(10.dp)) {
+            Text("CONVOY STATUS", color = Accent, fontWeight = FontWeight.Bold, fontSize = 14.sp)
+            Text(when {
+                s.connected -> "● Live session · ${s.role.uppercase()}"
+                s.code.isNotBlank() -> "○ Reconnecting to convoy · attempt ${s.reconnectAttempt}"
+                else -> "○ Not connected · ready to create or join"
+            }, color = if (s.connected) Accent else Muted)
+            Text(if (s.connected) "${online}/${total} registered cars online · session ${s.code}" else "Cars can join from different mobile networks, even kilometres apart.", color = Muted)
+            if (s.connected) {
+                Text("Server: ${if (s.endpoint.startsWith("https://")) "Cloud / internet" else "Local Wi-Fi relay"} · Network round trip: ${if (s.clockReady) "${s.rttMs} ms" else "measuring"}", color = Muted)
+                if (s.rttMs > 500 && s.clockReady) Text("High network delay: synchronization and voice may lag.", color = Color(0xFFFFBF7A))
+                LargeButton("View connected cars") { openCars() }
+            } else LargeButton("Create or join a convoy") { openSession() }
+        }
+    }
+}
+
 @Composable private fun IntercomPanel(s: AppState, sync: SyncCoordinator, requestPermission: () -> Unit, openSession: () -> Unit) {
     val context = androidx.compose.ui.platform.LocalContext.current
     val isSpeaking = s.speakerId == s.memberId && s.memberId.isNotBlank()
@@ -367,6 +392,7 @@ private val pages = listOf("Home", "Music Library", "Playlists", "Create Session
         Column(Modifier.fillMaxWidth().padding(20.dp), verticalArrangement = Arrangement.spacedBy(10.dp)) {
             Text("CAR-TO-CAR INTERCOM", color = Accent, fontSize = 14.sp, fontWeight = FontWeight.Bold)
             Text(when {
+                s.talkPending -> "Requesting the microphone…"
                 !s.connected -> "Connect both cars to use Talk & Listen"
                 !s.supportsVoice -> "Server does not support the intercom. Use the convoy test server."
                 isSpeaking -> "You are talking · other cars are listening"
@@ -377,17 +403,17 @@ private val pages = listOf("Home", "Music Library", "Playlists", "Create Session
             else if (!s.supportsVoice) Text("Update the server address in Settings, then reconnect.", color = Muted)
             Row(horizontalArrangement = Arrangement.spacedBy(10.dp), modifier = Modifier.fillMaxWidth()) {
                 Box(Modifier.weight(1f)) {
-                    LargeButton("Start talking", s.supportsVoice && s.speakerId == null) {
+                    LargeButton("Start talking", s.connected && s.supportsVoice && s.speakerId == null && !s.talkPending) {
                         if (ContextCompat.checkSelfPermission(context, Manifest.permission.RECORD_AUDIO) ==
                             android.content.pm.PackageManager.PERMISSION_GRANTED) sync.pttRequest()
                         else requestPermission()
                     }
                 }
                 Box(Modifier.weight(1f)) {
-                    LargeButton("Stop talking", isSpeaking) { sync.pttRelease() }
+                    LargeButton("Stop talking", isSpeaking || s.talkPending) { sync.pttRelease() }
                 }
             }
-            Text("Listening is automatic while connected. Allow microphone access to talk. Only operate touchscreen controls while parked or as a passenger.", color = Muted, fontSize = 12.sp)
+            Text("Listening is automatic while connected. If a talk request fails, it times out so the microphone can be retried. Only use controls while parked or as a passenger.", color = Muted, fontSize = 12.sp)
         }
     }
 }
