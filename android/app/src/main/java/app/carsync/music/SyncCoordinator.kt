@@ -29,7 +29,7 @@ data class AppState(
     val guestControls: Boolean = false, val sharing: Boolean = false, val guestAdditions: Boolean = false, val serverFeatures: Set<String> = emptySet(), val pendingGuestSong: String = "", val pendingGuestSongs: List<String> = emptyList(), val audioAvailable: Set<String> = emptySet(), val audioManifestKnown: Boolean = false, val repeat: String = "off", val driving: Boolean = false,
     val latencyMs: Long = 0, val message: String = "Import MP3s and create or join a session.", val busy: Boolean = false,
     val invitationCode: String = "", val invitationServer: String = "", val serviceReady: Boolean = false, val requestedPlaying: Boolean = false, val audioError: String = "",
-    val parkedConfirmed: Boolean = false, val audioOnlyVideo: Boolean = false, val automotive: Boolean = false, val vehicleKnown: Boolean = false, val vehicleRestricted: Boolean = false, val mediaProtocol: Int = 1, val acousticProbeMs: Long? = null
+    val parkedConfirmed: Boolean = false, val audioOnlyVideo: Boolean = false, val automotive: Boolean = false, val vehicleKnown: Boolean = false, val vehicleRestricted: Boolean = false, val mediaProtocol: Int = 1, val acousticProbeMs: Long? = null, val acousticVariationMs: Long? = null, val acousticProfileReliable: Boolean = false
 ) {
     val canControl get() = role == "host" || role == "local" || guestControls
     val supportsVoice get() = "convoy_ptt_pcm16_v1" in serverFeatures
@@ -48,7 +48,10 @@ class SyncCoordinator(private val context: Context, val dao: LibraryDao, prefere
     )
     private val scope = CoroutineScope(SupervisorJob() + Dispatchers.Main.immediate)
     val http = OkHttpClient.Builder().connectTimeout(10, java.util.concurrent.TimeUnit.SECONDS).readTimeout(30, java.util.concurrent.TimeUnit.SECONDS).pingInterval(10, java.util.concurrent.TimeUnit.SECONDS).build()
-    private val mutable = MutableStateFlow(AppState(endpoint = initialEndpoint, carName = prefs.getString("name", "My car")!!, code = prefs.getString("code", "")!!, role = prefs.getString("role", "")!!, memberId = prefs.getString("memberId", "")!!, latencyMs = prefs.getLong("latency", 0), driving = prefs.getBoolean("driving", false)))
+    private val mutable = MutableStateFlow(AppState(endpoint = initialEndpoint, carName = prefs.getString("name", "My car")!!, code = prefs.getString("code", "")!!, role = prefs.getString("role", "")!!, memberId = prefs.getString("memberId", "")!!, latencyMs = prefs.getLong("latency", 0), driving = prefs.getBoolean("driving", false),
+        acousticProbeMs = prefs.getLong("acoustic_profile_ms", -1).takeIf { it >= 0 },
+        acousticVariationMs = prefs.getLong("acoustic_profile_variation", -1).takeIf { it >= 0 },
+        acousticProfileReliable = prefs.getBoolean("acoustic_profile_reliable", false)))
     val state: StateFlow<AppState> = mutable.asStateFlow()
     private var bearer = prefs.getString("token", "")!!
     private var ws: WebSocket? = null
@@ -246,18 +249,44 @@ class SyncCoordinator(private val context: Context, val dao: LibraryDao, prefere
             }
         }
     }
+    /** Automatically performs three acoustic loopback measurements while parked.
+     * Results are diagnostics only; recording latency is not an output-only offset.
+     */
     fun measureAcoustics() {
-        if (state.value.driving || state.value.playing || state.value.requestedPlaying ||
+        if (state.value.busy || state.value.driving || state.value.playing || state.value.requestedPlaying ||
+            state.value.speakerId != null || state.value.talkPending ||
             (state.value.automotive && (!state.value.vehicleKnown || state.value.vehicleRestricted || !state.value.parkedConfirmed))) {
-            message("Park and pause music before starting acoustic measurement."); return
+            message("Park, stop intercom and pause music before acoustic calibration."); return
         }
         scope.launch {
-            update { it.copy(busy = true, acousticProbeMs = null) }
+            update { it.copy(busy = true) }
+            val oldProfile = prefs.getLong("acoustic_profile_ms", -1L).takeIf { it >= 0 }
             try {
-                val result = AcousticProbe(context).measure()
-                update { it.copy(acousticProbeMs = result) }
-                message(if (result == null) "Measurement unavailable. Allow microphone permission and try a quieter cabin." else "Measured speaker-to-microphone loopback about ${result}ms. Diagnostic only; do not apply as the device offset.")
-            } finally { update { it.copy(busy = false) } }
+                val probe = AcousticProbe(context)
+                val measurements = mutableListOf<Long?>()
+                repeat(3) { index ->
+                    if (state.value.driving || state.value.speakerId != null) throw IllegalStateException("Stopped: vehicle or intercom became active")
+                    message("Automatic acoustic check: tone ${index + 1} of 3. Hold the phone still and keep the cabin quiet.")
+                    measurements += probe.measure()
+                    if (index < 2) delay(300)
+                }
+                val profile = AutomaticAcousticCalibration.summarize(measurements)
+                if (profile == null) {
+                    message("Acoustic calibration failed. Check microphone access, speaker volume and cabin noise.")
+                } else {
+                    prefs.edit().putLong("acoustic_profile_ms", profile.estimatedRoundTripMs)
+                        .putLong("acoustic_profile_variation", profile.variationMs)
+                        .putBoolean("acoustic_profile_reliable", profile.reliable).apply()
+                    update { it.copy(acousticProbeMs = profile.estimatedRoundTripMs,
+                        acousticVariationMs = profile.variationMs, acousticProfileReliable = profile.reliable) }
+                    val routeChange = AutomaticAcousticCalibration.routeChanged(oldProfile, profile)
+                    val quality = if (profile.reliable) "stable" else "variable"
+                    message("Automatic acoustic profile: ${profile.estimatedRoundTripMs}ms speaker-to-mic, ${profile.variationMs}ms variation ($quality)." +
+                        if (routeChange) " Audio route changed; check manual synchronization settings." else
+                            " This includes microphone delay and cannot automatically align different cars.")
+                }
+            } catch (e: Exception) { message("Calibration stopped: ${e.message.orEmpty()}") }
+            finally { update { it.copy(busy = false) } }
         }
     }
     private var generation = 0

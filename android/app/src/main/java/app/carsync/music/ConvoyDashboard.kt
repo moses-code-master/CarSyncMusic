@@ -35,7 +35,8 @@ fun ConvoyDashboard(
     onMap: () -> Unit,
     onPlaylist: () -> Unit,
     onCars: () -> Unit,
-    onPlayer: () -> Unit
+    onPlayer: () -> Unit,
+    onVoice: () -> Unit
 ) {
     val stats = ConvoyDashboardData.from(state)
     val speakerIsMe = state.memberId.isNotBlank() && state.speakerId == state.memberId
@@ -59,10 +60,17 @@ fun ConvoyDashboard(
                 }, color = if (state.connected) BoardAccent else BoardMuted, fontSize = 12.sp, maxLines = 2)
                 Text("Created by Brayo", color = BoardMuted, fontSize = 10.sp)
             }
-            Surface(color = BoardPanel, shape = RoundedCornerShape(24.dp)) {
-                Text(if (state.role.isNotBlank()) state.role.uppercase() else "OFFLINE",
-                    color = BoardWhite, fontSize = 11.sp, fontWeight = FontWeight.Bold,
-                    modifier = Modifier.padding(horizontal = 10.dp, vertical = 5.dp))
+            Column(horizontalAlignment = Alignment.End, verticalArrangement = Arrangement.spacedBy(4.dp)) {
+                Surface(color = BoardPanel, shape = RoundedCornerShape(24.dp)) {
+                    Text(if (state.role.isNotBlank()) state.role.uppercase() else "OFFLINE",
+                        color = BoardWhite, fontSize = 11.sp, fontWeight = FontWeight.Bold,
+                        modifier = Modifier.padding(horizontal = 10.dp, vertical = 5.dp))
+                }
+                Text("🎙 Voice", modifier = Modifier
+                    .background(BoardPanel, RoundedCornerShape(14.dp))
+                    .clickable(enabled = !state.driving) { onVoice() }
+                    .padding(horizontal = 10.dp, vertical = 6.dp),
+                    color = if (state.driving) BoardMuted else BoardAccent, fontSize = 12.sp)
             }
         }
 
