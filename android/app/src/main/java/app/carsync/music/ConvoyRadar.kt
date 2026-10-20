@@ -18,15 +18,26 @@ class ConvoyRadar(private val context: Context, private val publish: (Location?)
         @Deprecated("Older Android callback")
         override fun onStatusChanged(provider: String?, status: Int, extras: Bundle?) {}
         override fun onProviderEnabled(provider: String) {}
-        override fun onProviderDisabled(provider: String) {}
+        override fun onProviderDisabled(provider: String) { if (active) publish(null) }
     }
     fun start(): Boolean {
         if (active) return true
         val fine = ContextCompat.checkSelfPermission(context, Manifest.permission.ACCESS_FINE_LOCATION) == PackageManager.PERMISSION_GRANTED
         val coarse = ContextCompat.checkSelfPermission(context, Manifest.permission.ACCESS_COARSE_LOCATION) == PackageManager.PERMISSION_GRANTED
         if (!fine && !coarse) return false
-        val provider = if (fine && manager.isProviderEnabled(LocationManager.GPS_PROVIDER)) LocationManager.GPS_PROVIDER else LocationManager.NETWORK_PROVIDER
-        return try { manager.requestLocationUpdates(provider, 2000L, 5f, listener); active = true; true } catch (_: Exception) { false }
+        val provider = when {
+            fine && manager.isProviderEnabled(LocationManager.GPS_PROVIDER) -> LocationManager.GPS_PROVIDER
+            manager.isProviderEnabled(LocationManager.NETWORK_PROVIDER) -> LocationManager.NETWORK_PROVIDER
+            else -> return false
+        }
+        // minDistance 0 is intentional: parked cars must keep receiving fixes.
+        // With 5m as the old threshold, stationary vehicles disappeared after
+        // the server's live-position expiration despite still sharing location.
+        return try {
+            manager.requestLocationUpdates(provider, 4000L, 0f, listener)
+            active = true
+            true
+        } catch (_: Exception) { false }
     }
     fun stop() {
         active = false
