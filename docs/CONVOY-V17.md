@@ -61,3 +61,11 @@ The updated session snapshot includes `capabilities`, and `GET /health` responds
 - The intercom still uses PCM16 over WebSocket and lacks Opus, production echo testing and guaranteed foreground-device microphone support. This is not a safety-critical radio.
 - The host must approve guest uploads by opting into sharing and guest contributions; guests do not receive admin privileges. Audio must be owned or shared with permission.
 - On Render free storage, uploaded media and sessions can disappear on restart/redeploy. Test with short MP3 files first.
+
+## Beta 3 server setup — automatic
+
+Starting with `1.7.0-beta.3`, **no manual server entry is required**. The beta APK defaults to `https://carsync-music-convoy-test.onrender.com` on a new installation. On an upgraded phone that still uses the original uncustomized `https://carsync-music.onrender.com` default, it migrates to the convoy test backend **unless the phone is already in a session**. A phone in an existing session retains its endpoint until the user leaves that session; leaving migrates it to the beta endpoint.
+
+Custom and explicitly saved URLs are preserved. To override the default, use Settings → Server and Save. For older installations without an explicit-override marker, a saved URL identical to the original stock default is treated as the old default. New tests verify migration and override behavior.
+
+The stable v1.6.0 build on `main` and existing production Render service remain unchanged. This beta endpoint is a free, nonproduction staging service; its uploaded media and session records may be lost on restart and its startup may be delayed. Two phones must use **the same endpoint and a new session code**.
