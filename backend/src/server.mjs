@@ -21,7 +21,7 @@ export function createServer({ dataDir = process.env.DATA_DIR || './data', port 
   const metric = (s, m, event, status = {}) => { if (!closing) db.prepare('INSERT INTO telemetry VALUES(?,?,?,?,?,?,?,?)').run(s.code, m.id, now(), event, status.driftMs ?? null, status.rttMs ?? null, status.buffered ? 1 : 0, status.missing ? 1 : 0); };
   const sessions = new Map(), peers = new Map(), rates = new Map();
   const guestReservations = new Map(); // Session-scoped upload grants expire after 5 minutes.
-  const capabilities = ['convoy_ptt_pcm16_v1', 'convoy_location_v1', 'convoy_votes_v1', 'guest_music_upload_v1'];
+  const capabilities = ['convoy_ptt_pcm16_v1', 'convoy_location_v1', 'convoy_votes_v1', 'guest_music_upload_v1', 'guest_media_batch_v1', 'guest_video_mp4_v1'];
   // Ephemeral voice floor and position data never enter the session database.
   const floors = new Map(), frameRates = new Map();
   const announce = (session, payload, exceptId = null) => {
@@ -29,6 +29,7 @@ export function createServer({ dataDir = process.env.DATA_DIR || './data', port 
       if (member.id !== exceptId) send(peers.get(member.id)?.ws, payload);
     }
   };
+  const mediaName = (code, t) => `${code}-${t.hash}.${t.mediaType === 'video' ? 'mp4' : 'mp3'}`;
   function releaseFloor(session, speakerId = null) {
     const current = floors.get(session.code);
     if (!current || (speakerId && current.memberId !== speakerId)) return false;
@@ -69,7 +70,7 @@ export function createServer({ dataDir = process.env.DATA_DIR || './data', port 
     return { id: m.id, name: m.name, role: m.role, online: !!peer, ...(peer?.status || {}), ...(livePosition ? { location: livePosition } : {}) };
   });
   function snapshot(s) {
-    return { type: 'state', mediaProtocol: 2, capabilities, maxGuests, code: s.code, playlist: s.playlist, audioAvailable: s.sharing ? s.playlist.filter(t => t.mediaType !== 'video' && existsSync(join(dataDir, `${s.code}-${t.hash}.mp3`))).map(t => t.hash) : [], frame: s.frame, previous: s.previous, repeat: s.repeat, sharing: s.sharing, guestControls: s.guestControls, guestAdditions: !!s.guestAdditions, votes: voteTotals(s), myVotes: s.votes || {}, speakerId: floors.get(s.code)?.memberId || null, expiresAt: s.expiresAt, serverNow: now(), cars: cars(s) };
+    return { type: 'state', mediaProtocol: 2, capabilities, maxGuests, code: s.code, playlist: s.playlist, audioAvailable: s.sharing ? s.playlist.filter(t => existsSync(join(dataDir, mediaName(s.code,t)))).map(t => t.hash) : [], frame: s.frame, previous: s.previous, repeat: s.repeat, sharing: s.sharing, guestControls: s.guestControls, guestAdditions: !!s.guestAdditions, votes: voteTotals(s), myVotes: s.votes || {}, speakerId: floors.get(s.code)?.memberId || null, expiresAt: s.expiresAt, serverNow: now(), cars: cars(s) };
   }
   const broadcast = s => {
     const state = snapshot(s), video = s.playlist.some(t => t.mediaType === 'video');
@@ -115,7 +116,7 @@ export function createServer({ dataDir = process.env.DATA_DIR || './data', port 
         const s = { code: c, members: [member], playlist: [], repeat: 'off', sharing: false, guestControls: false, guestAdditions: false, expiresAt: now() + 24 * 3600000, frame: { index: 0, positionMs: 0, playing: false, executeAt: now(), revision: 0 }, previous: null, seen: [], votes: {} };
         sessions.set(c, s); save(s); res.setHeader('Content-Type', 'application/json'); res.end(JSON.stringify({ code: c, token: raw, memberId: member.id, role: member.role })); return;
       }
-      const match = path.match(/^\/sessions\/(\d{6})(?:\/(join|audio|metrics)(?:\/([a-f0-9]{64}))?)?$/);
+      const match = path.match(/^\/sessions\/(\d{6})(?:\/(join|audio|video|metrics)(?:\/([a-f0-9]{64}))?)?$/);
       if (!match) return fail(res, 404, 'Not found');
       const [, c, route, hash] = match;
       if (route === 'join' && req.method === 'POST') {
@@ -137,27 +138,29 @@ export function createServer({ dataDir = process.env.DATA_DIR || './data', port 
         for (const m of s.members) peers.get(m.id)?.ws.close(4001, 'Session ended');
         releaseFloor(s); sessions.delete(c); db.prepare('DELETE FROM sessions WHERE code=?').run(c); db.prepare('DELETE FROM telemetry WHERE code=?').run(c); removeAudio(c); res.end('{}'); return;
       }
-      if (route === 'audio' && hash) {
-        if (!s.sharing) return fail(res, 403, 'Host has not permitted audio sharing');
+      if (['audio', 'video'].includes(route) && hash) {
+        if (!s.sharing) return fail(res, 403, 'Host has not permitted media sharing');
         const reservedKey = c + ':' + hash;
         const reservation = guestReservations.get(reservedKey);
         const guestAuthorized = req.method === 'PUT' && s.guestAdditions && reservation &&
           reservation.memberId === member.id && reservation.expiresAt > now();
         const listedTrack = s.playlist.find(t => t.hash === hash);
         if (!listedTrack && !guestAuthorized) return fail(res, 404, 'Track is not approved for this session');
-        if ((listedTrack || reservation?.track)?.mediaType === 'video') return fail(res, 415, 'Only MP3 contributions are supported.');
-        const file = join(dataDir, `${c}-${hash}.mp3`);
+        const t = listedTrack || reservation?.track;
+        if ((route === 'video') !== (t.mediaType === 'video')) return fail(res, 415, 'Media route does not match track');
+        if (t.mediaType === 'video' && t.mimeType !== 'video/mp4') return fail(res, 415, 'Only MP4 video relay supported');
+        const file = join(dataDir, mediaName(c,t));
         if (req.method === 'PUT' && (member.role === 'host' || guestAuthorized)) {
           const length = Number(req.headers['content-length']);
-          if (!length || length > 100 * 1024 * 1024) return fail(res, 413, 'Track limit is 100 MB');
-          const used = readdirSync(dataDir).filter(f => f.endsWith('.mp3')).reduce((n, f) => n + statSync(join(dataDir, f)).size, 0);
+          if (!Number.isSafeInteger(length) || length <= 0 || length > 100 * 1024 * 1024) return fail(res, 413, 'Media file limit is 100 MB');
+          const used = readdirSync(dataDir).filter(f => f.endsWith('.mp3') || f.endsWith('.mp4')).reduce((n, f) => n + statSync(join(dataDir, f)).size, 0);
           if (used + reservedBytes + length > 2 * 1024 ** 3) return fail(res, 507, 'Relay storage is full');
           if (uploads.has(file)) return fail(res, 409, 'This track is already uploading');
           uploads.add(file); reservedBytes += length;
           const tmp = `${file}.${token()}.tmp`, sha = createHash('sha256'); let bytes = 0;
           try {
             await pipeline(req, new Transform({ transform(chunk, enc, cb) { bytes += chunk.length; if (bytes > length) return cb(Error('Size exceeded')); sha.update(chunk); cb(null, chunk); } }), createWriteStream(tmp));
-            if (sha.digest('hex') !== hash) throw Error('Track hash mismatch');
+            if (bytes !== length || sha.digest('hex') !== hash) throw Error('Media size or hash mismatch');
             if (!sessions.has(c) || !s.sharing) throw Error('Sharing revoked during upload');
             if (guestAuthorized && (!s.guestAdditions || guestReservations.get(reservedKey) !== reservation || reservation.expiresAt <= now())) throw Error('Guest upload permission expired');
             renameSync(tmp, file);
@@ -175,7 +178,7 @@ export function createServer({ dataDir = process.env.DATA_DIR || './data', port 
           return;
         }
         if (['GET', 'HEAD'].includes(req.method)) {
-          if (!existsSync(file)) return fail(res, 404, 'Host must upload this track, or import the identical MP3 locally');
+          if (!existsSync(file)) return fail(res, 404, 'Media file not uploaded; import identical local file or ask uploader to share');
           const size = statSync(file).size, range = req.headers.range;
           let start = 0, end = size - 1, status = 200;
           if (range) {
@@ -183,7 +186,7 @@ export function createServer({ dataDir = process.env.DATA_DIR || './data', port 
             if (!r || Number(r[1]) >= size || (r[2] && Number(r[2]) < Number(r[1]))) { res.writeHead(416, { 'Content-Range': `bytes */${size}` }); res.end(); return; }
             start = Number(r[1]); end = r[2] ? Math.min(Number(r[2]), size - 1) : end; status = 206;
           }
-          res.writeHead(status, { 'Content-Type': 'audio/mpeg', 'Accept-Ranges': 'bytes', 'Content-Length': end - start + 1, ...(status === 206 ? { 'Content-Range': `bytes ${start}-${end}/${size}` } : {}) });
+          res.writeHead(status, { 'Content-Type': t.mediaType === 'video' ? 'video/mp4' : 'audio/mpeg', 'Accept-Ranges': 'bytes', 'Content-Length': end - start + 1, ...(status === 206 ? { 'Content-Range': `bytes ${start}-${end}/${size}` } : {}) });
           if (req.method === 'HEAD') res.end(); else createReadStream(file, { start, end }).pipe(res); return;
         }
       }
@@ -254,9 +257,9 @@ export function createServer({ dataDir = process.env.DATA_DIR || './data', port 
         // Both host and guest can request PTT regardless of guest music controls.
         if (b.type === 'guest_add') {
           if (!s.sharing || !s.guestAdditions) throw Error('Host must enable guest songs and music sharing');
-          if (limited(member.id + ':guest_songs', 10, 3600000)) throw Error('Too many song submissions');
+          if (limited(member.id + ':guest_songs', 200, 3600000)) throw Error('Guest media rate limit reached. Try again later');
           const track = validatePlaylist([b.track])[0];
-          if (track.mediaType !== 'audio' || track.mimeType !== 'audio/mpeg' || track.sizeBytes > 100 * 1024 * 1024) throw Error('Only MP3s up to 100 MB are allowed');
+          if (!((track.mediaType === 'audio' && track.mimeType === 'audio/mpeg') || (track.mediaType === 'video' && track.mimeType === 'video/mp4')) || track.sizeBytes > 100 * 1024 * 1024) throw Error('Only MP3 or MP4 files up to 100 MB are allowed');
           if (s.playlist.length >= 500) throw Error('Playlist is full');
           if (s.playlist.some(t => t.hash === track.hash)) throw Error('Song already in the session');
           const key = s.code + ':' + track.hash;
@@ -300,7 +303,7 @@ export function createServer({ dataDir = process.env.DATA_DIR || './data', port 
     ws.on('close', () => { clearTimeout(deadline); if (context && peers.get(context.member.id)?.ws === ws) { releaseFloor(context.s, context.member.id); peers.delete(context.member.id); metric(context.s, context.member, 'offline'); broadcast(context.s); } });
     ws.on('error', () => {});
   });
-  function removeAudio(c) { for (const f of readdirSync(dataDir)) if (f.startsWith(c + '-') && (f.endsWith('.mp3') || f.endsWith('.tmp'))) try { unlinkSync(join(dataDir, f)); } catch {} }
+  function removeAudio(c) { for (const f of readdirSync(dataDir)) if (f.startsWith(c + '-') && (f.endsWith('.mp3') || f.endsWith('.mp4') || f.endsWith('.tmp'))) try { unlinkSync(join(dataDir, f)); } catch {} }
   const cleanup = setInterval(() => {
     for (const [c, s] of sessions) if (s.expiresAt < now()) { releaseFloor(s); sessions.delete(c); removeAudio(c); db.prepare('DELETE FROM sessions WHERE code=?').run(c); for (const m of s.members) peers.get(m.id)?.ws.close(4001, 'Session expired'); }
     for (const [key, a] of rates) if (now() - a.at(-1) > 60000) rates.delete(key);
