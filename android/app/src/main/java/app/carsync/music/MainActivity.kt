@@ -113,6 +113,9 @@ private val pages = listOf("Home", "Music Library", "Playlists", "Create Session
     val microphoneRequest = rememberLauncherForActivityResult(ActivityResultContracts.RequestPermission()) { granted ->
         if (granted) sync.pttRequest() else sync.message("Microphone permission denied.")
     }
+    val acousticRequest = rememberLauncherForActivityResult(ActivityResultContracts.RequestPermission()) { granted ->
+        if (granted) sync.measureAcoustics() else sync.message("Microphone permission denied.")
+    }
     val locationRequest = rememberLauncherForActivityResult(ActivityResultContracts.RequestMultiplePermissions()) { result ->
         if (result.values.any { it }) sync.toggleRadar(true) else sync.message("Location permission denied.")
     }
@@ -319,6 +322,12 @@ private val pages = listOf("Home", "Music Library", "Playlists", "Create Session
                             LargeButton("Save server & car name", s.code.isBlank()) { try { sync.configure(endpoint, carName) } catch (e: Exception) { sync.message(e.message ?: "Invalid server") } }
                             OutlinedTextField(latency, { latency = it.filter(Char::isDigit).take(4) }, label = { Text("Local output latency compensation · 0–2000 ms") }, modifier = Modifier.fillMaxWidth())
                             LargeButton("Save calibration") { sync.latency(latency.toLongOrNull() ?: 0) }
+                            LargeButton("Measure speaker-to-mic delay (parked)", !s.busy && !s.driving && !s.playing) {
+                                if (ContextCompat.checkSelfPermission(context, Manifest.permission.RECORD_AUDIO) ==
+                                    android.content.pm.PackageManager.PERMISSION_GRANTED) sync.measureAcoustics()
+                                else acousticRequest.launch(Manifest.permission.RECORD_AUDIO)
+                            }
+                            if (s.acousticProbeMs != null) Text("Diagnostic loopback: ${s.acousticProbeMs} ms. This includes microphone delay; not an automatic synchronization adjustment.", color = Muted)
                             Text("A device with more output delay starts earlier. Compare recordings from both speakers and adjust this value while parked.", color = Muted)
                             if (s.role == "host") {
                                 SettingToggle("Guest playback controls", s.guestControls, "Allow all guests to play, pause, skip and seek for the whole session.") { sync.settings(guestControls = it) }
