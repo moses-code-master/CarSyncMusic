@@ -156,6 +156,7 @@ private val pages = listOf("Home", "Music Library", "Playlists", "Create Session
             }
         }) { insets ->
             Column(Modifier.fillMaxSize().padding(insets).verticalScroll(pageScroll).padding(20.dp), verticalArrangement = Arrangement.spacedBy(16.dp)) {
+                if (page == "Home") IntercomPanel(s, sync, { microphoneRequest.launch(Manifest.permission.RECORD_AUDIO) }, { page = "Create Session" })
                 if (s.driving && page !in listOf("Now Playing", "Connected Cars", "Settings")) { Text("Driving mode: only playback and connection status are available."); LargeButton("Now Playing") { page = "Now Playing" } }
                 else when (page) {
                     "Home" -> {
@@ -265,17 +266,8 @@ private val pages = listOf("Home", "Music Library", "Playlists", "Create Session
                     "Videos" -> VideoLibraryScreen(s, sync) { page = "Now Playing" }
                     "Now Playing" -> {
                         NowPlaying(s, sync)
+                        IntercomPanel(s, sync, { microphoneRequest.launch(Manifest.permission.RECORD_AUDIO) }, { page = "Create Session" })
                         if (s.connected) {
-                            Text("Convoy Intercom", fontSize = 22.sp, fontWeight = FontWeight.Bold)
-                            Text(if (!s.supportsVoice) "Intercom unavailable: old server version" else if (s.speakerId != null) "Speaker active" else "Channel available", color = if (s.supportsVoice) Muted else Color(0xFFFFBF7A))
-                            if (!s.supportsVoice) Text("Upgrade the session server to enable talking from either car. The old Render server only supports synchronized playback.", color = Muted)
-                            LargeButton("Start talking", s.supportsVoice && s.speakerId == null) {
-                                if (ContextCompat.checkSelfPermission(context, Manifest.permission.RECORD_AUDIO) ==
-                                    android.content.pm.PackageManager.PERMISSION_GRANTED) sync.pttRequest()
-                                else microphoneRequest.launch(Manifest.permission.RECORD_AUDIO)
-                            }
-                            LargeButton("Stop talking", s.speakerId == s.memberId) { sync.pttRelease() }
-                            Text("Use hands-free controls where permitted. Do not interact with the screen while driving.", color = Muted)
                             if (!s.driving) {
                                 Text("Vote for an upcoming song", fontSize = 18.sp)
                                 s.queue.drop(s.index + 1).forEach { track ->
@@ -361,6 +353,39 @@ private val pages = listOf("Home", "Music Library", "Playlists", "Create Session
                     "License" -> { LargeButton("Back to About") { page = "About" }; ProjectLicenseScreen() }
                 }
             }
+        }
+    }
+}
+
+@Composable private fun IntercomPanel(s: AppState, sync: SyncCoordinator, requestPermission: () -> Unit, openSession: () -> Unit) {
+    val context = androidx.compose.ui.platform.LocalContext.current
+    val isSpeaking = s.speakerId == s.memberId && s.memberId.isNotBlank()
+    val anotherSpeaker = s.speakerId != null && !isSpeaking
+    Card(colors = CardDefaults.cardColors(containerColor = Panel), shape = RoundedCornerShape(20.dp)) {
+        Column(Modifier.fillMaxWidth().padding(20.dp), verticalArrangement = Arrangement.spacedBy(10.dp)) {
+            Text("CAR-TO-CAR INTERCOM", color = Accent, fontSize = 14.sp, fontWeight = FontWeight.Bold)
+            Text(when {
+                !s.connected -> "Connect both cars to use Talk & Listen"
+                !s.supportsVoice -> "Server does not support the intercom. Use the convoy test server."
+                isSpeaking -> "You are talking · other cars are listening"
+                anotherSpeaker -> "Listening · another car has the microphone"
+                else -> "Ready to talk · both host and guests can speak"
+            }, color = if (s.connected && s.supportsVoice) Accent else Color(0xFFFFBF7A))
+            if (!s.connected) LargeButton("Create or join a session") { openSession() }
+            else if (!s.supportsVoice) Text("Update the server address in Settings, then reconnect.", color = Muted)
+            Row(horizontalArrangement = Arrangement.spacedBy(10.dp), modifier = Modifier.fillMaxWidth()) {
+                Box(Modifier.weight(1f)) {
+                    LargeButton("Start talking", s.supportsVoice && s.speakerId == null) {
+                        if (ContextCompat.checkSelfPermission(context, Manifest.permission.RECORD_AUDIO) ==
+                            android.content.pm.PackageManager.PERMISSION_GRANTED) sync.pttRequest()
+                        else requestPermission()
+                    }
+                }
+                Box(Modifier.weight(1f)) {
+                    LargeButton("Stop talking", isSpeaking) { sync.pttRelease() }
+                }
+            }
+            Text("Listening is automatic while connected. Allow microphone access to talk. Only operate touchscreen controls while parked or as a passenger.", color = Muted, fontSize = 12.sp)
         }
     }
 }
