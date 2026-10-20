@@ -172,3 +172,18 @@ Release gate: CI tests (codec quality, mixed-version fanout, Android unit/emulat
 ## v1.9.0-beta.4 — internet-first setup clarification
 
 CarSync uses **one internet connection per car** (cellular data or internet-connected Wi-Fi) for distant convoy music, talk and location. Bluetooth **cannot** carry the session between cars kilometers apart: it is only an optional local connection to a car's call-capable microphone/speakers. The toggle is OFF for first-time installs and stays OFF until the member explicitly opts in while parked; toggling it does not affect the internet server. Existing users' explicit setting is preserved when upgrading. Head units without a suitable Bluetooth call microphone continue using Android's normal input/output devices. Settings now labels each responsibility plainly, and unit tests verify that internet server defaults never require Bluetooth.
+
+
+## CarSync v1.9.0-beta.5 — continuous audio and scratch/rebuffer investigation
+
+A test user reported the music played but had occasional "scratch" sounds after earlier uninterrupted playback. Investigation found that the synchronized player applied up to ±2% playback-speed correction on **every 250 ms tick**, and sought to the server timeline when drift exceeded **300 ms**, with a seek allowed every **1.5 seconds**. Frequent speed changes or seeks can cause an audible glitch on some Android head units. This is a plausible cause, **not a verified diagnosis** for every device.
+
+Changes:
+- New pure Kotlin `PlaybackContinuityGuard` smooths timing measurements, ignores transient clock spikes, keeps a 120 ms correction deadband, limits soft rate correction to ±0.8% and issues speed commands at most every 1.5 seconds, rather than on every 250 ms tick.
+- A hard sync seek now requires measured timing error ≥1.8 seconds and persistent smoothed drift ≥1.5 seconds for at least 1.75 seconds. Subsequent hard seeks must be at least 15 seconds apart. Hard seeks are suppressed while any convoy intercom announcement is active. An explicit play/seek/track-change command still takes effect immediately.
+- The player resets its continuity filter when preparing a new track and after authoritative playback revisions; stale measurements from one song cannot repeatedly seek the next song.
+- Removed the UI volume slider's forced ExoPlayer 0.2/1.0 gain jumps during PTT, preserving smooth music ducking and ordinary Android stream-volume control.
+- Settings now displays **Unexpected rebuffer events** and **large sync recoveries**, along with the most recent correction status. A rebuffer counter increases only when music had actually been playing before `STATE_BUFFERING` while playback remained requested, avoiding counting initial playback preparation as a stall.
+- Unit tests cover transient jitter, sustained severe drift, slow gentle adjustment, announcements, and reset behavior.
+
+Limitations: Without device recordings and a comparison between local MP3 playback and streamed convoy audio, we cannot know whether observed scratches come from output-route switching, Bluetooth codec quality, damaged MP3 source, network rebuffering, or timing seeks. Test the same file locally and remotely on a parked phone at safe listening volume. Verify a song plays for five minutes without new rebuffer events or large sync recoveries. A change in network quality or external audio hardware may require additional tuning. Nothing has been deployed to production.
