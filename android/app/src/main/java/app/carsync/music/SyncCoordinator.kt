@@ -26,7 +26,7 @@ data class AppState(
     val library: List<Track> = emptyList(), val playlists: List<SavedPlaylist> = emptyList(), val queue: List<RemoteTrack> = emptyList(), val cars: List<Car> = emptyList(), val maxGuests: Int = 10, val speakerId: String? = null, val memberId: String = "", val votes: Map<String, Int> = emptyMap(), val radarEnabled: Boolean = false, val discoveredServer: String = "",
     val index: Int = 0, val positionMs: Long = 0, val playing: Boolean = false, val buffering: Boolean = false, val missing: Boolean = false,
     val clockReady: Boolean = false, val driftMs: Long? = null, val rttMs: Long = 0, val volume: Float = 0.8f,
-    val guestControls: Boolean = false, val sharing: Boolean = false, val guestAdditions: Boolean = false, val serverFeatures: Set<String> = emptySet(), val pendingGuestSong: String = "", val audioAvailable: Set<String> = emptySet(), val audioManifestKnown: Boolean = false, val repeat: String = "off", val driving: Boolean = false,
+    val guestControls: Boolean = false, val sharing: Boolean = false, val guestAdditions: Boolean = false, val serverFeatures: Set<String> = emptySet(), val pendingGuestSong: String = "", val pendingGuestSongs: List<String> = emptyList(), val audioAvailable: Set<String> = emptySet(), val audioManifestKnown: Boolean = false, val repeat: String = "off", val driving: Boolean = false,
     val latencyMs: Long = 0, val message: String = "Import MP3s and create or join a session.", val busy: Boolean = false,
     val invitationCode: String = "", val invitationServer: String = "", val serviceReady: Boolean = false, val requestedPlaying: Boolean = false, val audioError: String = "",
     val parkedConfirmed: Boolean = false, val audioOnlyVideo: Boolean = false, val automotive: Boolean = false, val vehicleKnown: Boolean = false, val vehicleRestricted: Boolean = false, val mediaProtocol: Int = 1, val acousticProbeMs: Long? = null
@@ -110,34 +110,66 @@ class SyncCoordinator(private val context: Context, val dao: LibraryDao, prefere
             send(JSONObject().put("type", "vote_track").put("hash", hash))
         else message("This server does not support guest song voting. Update the server.")
     }
-    fun addGuestSong(hash: String) {
+    fun addGuestSong(hash: String) = addGuestSongs(listOf(hash))
+    fun addGuestSongs(hashes: List<String>) {
         val state = state.value
-        if (!state.connected || state.driving) { message("Connect and park before contributing music."); return }
-        if (!state.supportsGuestMusic) { message("This server needs the guest music update."); return }
-        if (!state.sharing || !state.guestAdditions) { message("Ask the host to enable music sharing and guest song additions in Settings."); return }
-        val track = state.library.find { it.hash == hash && it.mediaType == "audio" } ?: run { message("Import the MP3 before adding it."); return }
-        if (track.durationMs <= 0 || track.sizeBytes > 100L * 1024 * 1024) { message("MP3 must be below 100 MB and have a valid duration."); return }
-        if (state.queue.any { it.hash == hash }) { message("Song already in this session."); return }
-        update { it.copy(pendingGuestSong = hash) }
-        val data = JSONObject().put("hash", track.hash).put("title", track.title)
-            .put("artist", track.artist).put("album", track.album)
-            .put("durationMs", track.durationMs).put("mediaType", "audio")
-            .put("mimeType", "audio/mpeg").put("sizeBytes", track.sizeBytes)
+        if (!state.connected || state.driving) { message("Connect and park before contributing media."); return }
+        if (!state.supportsGuestMusic) { message("The server needs the latest guest media update."); return }
+        if (!state.sharing || !state.guestAdditions) { message("Ask host to enable media sharing and guest additions."); return }
+        if (state.pendingGuestSong.isNotBlank() || state.busy) { message("A batch is already uploading."); return }
+        val accepted = hashes.distinct().filter { hash ->
+            val t = state.library.find { it.hash == hash }
+            t != null && ((t.mediaType == "audio" && t.mimeType == "audio/mpeg") ||
+                    (t.mediaType == "video" && t.mimeType == "video/mp4" &&
+                     "guest_video_mp4_v1" in state.serverFeatures)) &&
+                    t.durationMs > 0 && t.sizeBytes in 1L..104857600L &&
+                    state.queue.none { it.hash == hash }
+        }.take(500)
+        if (accepted.isEmpty()) {
+            message("No new supported MP3 or MP4 files selected. Each must be at most 100 MB.")
+            return
+        }
+        update { it.copy(pendingGuestSongs = accepted) }
+        requestNextGuestUpload()
+    }
+    private fun requestNextGuestUpload() {
+        if (!state.value.connected || !state.value.sharing || !state.value.guestAdditions) {
+            update { it.copy(pendingGuestSong = "", pendingGuestSongs = emptyList(), busy = false) }
+            return
+        }
+        val next = state.value.pendingGuestSongs.firstOrNull()
+        if (next == null) {
+            update { it.copy(pendingGuestSong = "", busy = false) }
+            message("Selected media batch finished uploading.")
+            return
+        }
+        val t = state.value.library.find { it.hash == next }
+        if (t == null) {
+            update { it.copy(pendingGuestSongs = it.pendingGuestSongs.drop(1)) }
+            requestNextGuestUpload()
+            return
+        }
+        update { it.copy(pendingGuestSong = next, pendingGuestSongs = it.pendingGuestSongs.drop(1)) }
+        val data = JSONObject().put("hash", t.hash).put("title", t.title)
+            .put("artist", t.artist).put("album", t.album)
+            .put("durationMs", t.durationMs).put("mediaType", t.mediaType)
+            .put("mimeType", t.mimeType).put("sizeBytes", t.sizeBytes)
+            .put("width", t.width).put("height", t.height)
         send(JSONObject().put("type", "guest_add").put("track", data))
-        message("Requesting permission to upload ${track.title}…")
+        message("Requesting upload: ${t.title}")
     }
     private fun uploadGuestSong(hash: String) {
         val state = state.value
-        val track = state.library.find { it.hash == hash } ?: run { message("Song missing from device."); return }
+        val track = state.library.find { it.hash == hash } ?: run { message("Media missing from device."); return }
         scope.launch {
             update { it.copy(busy = true) }
             try {
                 withContext(Dispatchers.IO) {
                     val uri = Uri.parse(track.uri)
                     val size = context.contentResolver.openAssetFileDescriptor(uri, "r")?.use { it.length } ?: -1L
-                    require(size in 1L..104857600L) { "MP3 size unavailable or exceeds 100 MB. Import a copy first." }
+                    require(size in 1L..104857600L) { "File size unavailable or exceeds 100 MB" }
                     val body = object : RequestBody() {
-                        override fun contentType() = "audio/mpeg".toMediaType()
+                        override fun contentType() = track.mimeType.toMediaType()
                         override fun contentLength(): Long = size
                         override fun writeTo(sink: okio.BufferedSink) {
                             context.contentResolver.openInputStream(uri)?.use { input ->
@@ -147,18 +179,22 @@ class SyncCoordinator(private val context: Context, val dao: LibraryDao, prefere
                                     if (n < 0) break
                                     sink.write(buffer, 0, n)
                                 }
-                            } ?: throw IOException("MP3 is no longer readable")
+                            } ?: throw IOException("Media file is no longer readable")
                         }
                     }
-                    val request = Request.Builder().url("${state.endpoint}/sessions/${state.code}/audio/$hash")
+                    val route = if (track.mediaType == "video") "video" else "audio"
+                    val request = Request.Builder().url("${state.endpoint}/sessions/${state.code}/$route/$hash")
                         .header("Authorization", "Bearer $bearer").put(body).build()
                     http.newCall(request).execute().use { response ->
                         if (!response.isSuccessful) error(JSONObject(response.body?.string() ?: "{}").optString("error", "Upload rejected by server"))
                     }
                 }
-                message("Song added to session: ${track.title}")
-            } catch (e: Exception) { message("Guest song upload failed: ${e.message}") }
-            finally { update { it.copy(busy = false, pendingGuestSong = "") } }
+                message("Added ${track.title} to shared queue.")
+            } catch (e: Exception) { message("Media upload failed: ${e.message}") }
+            finally {
+                update { it.copy(busy = false, pendingGuestSong = "") }
+                requestNextGuestUpload()
+            }
         }
     }
     fun measureAcoustics() {
@@ -371,7 +407,14 @@ class SyncCoordinator(private val context: Context, val dao: LibraryDao, prefere
                 if (playPublishedHash != null && queue.firstOrNull()?.hash == playPublishedHash) { playPublishedHash = null; command("play") }
                 if (state.value.role == "host" && state.value.sharing && !state.value.busy && queue.any { it.mediaType == "audio" && it.hash !in available }) uploadMissingAudio()
             }
-            "error" -> message(x.getString("error"))
+            "error" -> {
+                val error = x.getString("error")
+                if (state.value.pendingGuestSong.isNotBlank() && !state.value.busy) {
+                    update { it.copy(pendingGuestSong = "") }
+                    message("File skipped: $error")
+                    requestNextGuestUpload()
+                } else message(error)
+            }
         }
     }
     private fun prepare(f: PlaybackFrame): Boolean {
@@ -379,9 +422,9 @@ class SyncCoordinator(private val context: Context, val dao: LibraryDao, prefere
         val remote = state.value.queue.getOrNull(f.index) ?: run { p.pause(); p.clearMediaItems(); preparedHash = ""; return false }
         if (preparedHash == remote.hash) { update { it.copy(index = f.index) }; return true }
         val local = state.value.library.find { it.hash == remote.hash && it.mediaType == remote.mediaType }
-        val relayReady = remote.mediaType == "audio" && state.value.sharing && (!state.value.audioManifestKnown || remote.hash in state.value.audioAvailable)
-        val uri = if (local != null) local.uri else if (relayReady) "${state.value.endpoint}/sessions/${state.value.code}/audio/${remote.hash}" else null
-        if (uri == null) { p.pause(); p.clearMediaItems(); preparedHash = ""; update { it.copy(index = f.index, missing = true, playing = false, audioError = "", message = if (remote.mediaType == "video") "Missing matching video: ${remote.title}. Import the exact same file on this device. Video is local-only; no cloud upload." else if (it.sharing) "Waiting for the host to upload ${remote.title}. Playback will start automatically." else "Connected, but this song is not on this device. Ask the host to tap Share music with guests, or import the identical MP3.") }; return false }
+        val relayReady = state.value.sharing && (!state.value.audioManifestKnown || remote.hash in state.value.audioAvailable) && (remote.mediaType == "audio" || (remote.mediaType == "video" && remote.mimeType == "video/mp4"))
+        val uri = if (local != null) local.uri else if (relayReady) "${state.value.endpoint}/sessions/${state.value.code}/${if (remote.mediaType == "video") "video" else "audio"}/${remote.hash}" else null
+        if (uri == null) { p.pause(); p.clearMediaItems(); preparedHash = ""; update { it.copy(index = f.index, missing = true, playing = false, audioError = "", message = if (remote.mediaType == "video") "Missing video: ${remote.title}. Request MP4 sharing or import the matching file." else if (it.sharing) "Waiting for the host to upload ${remote.title}. Playback will start automatically." else "Connected, but this song is not on this device. Ask the host to tap Share music with guests, or import the identical MP3.") }; return false }
         val metadata = MediaMetadata.Builder().setTitle(remote.title).setArtist(remote.artist).setAlbumTitle(remote.album).apply { local?.artPath?.let { setArtworkUri(Uri.fromFile(java.io.File(it))) } }.build()
         activeRevision = -1
         p.pause(); p.setMediaItem(MediaItem.Builder().setMediaId(remote.hash).setUri(uri).setMimeType(remote.mimeType).setMediaMetadata(metadata).build(), f.positionMs); p.prepare(); preparedHash = remote.hash
@@ -618,7 +661,7 @@ class SyncCoordinator(private val context: Context, val dao: LibraryDao, prefere
         )
         prefs.edit().remove("token").remove("code").remove("role").remove("memberId")
             .putString("endpoint", nextEndpoint).apply()
-        update { it.copy(endpoint = nextEndpoint, code = "", role = "", memberId = "", radarEnabled = false, speakerId = null, serverFeatures = emptySet(), guestAdditions = false, pendingGuestSong = "", connected = false, queue = emptyList(), cars = emptyList(), clockReady = false, driftMs = null, requestedPlaying = false, audioError = "", message = if (clearMessage) "Session left. The host can create a new session for the group." else it.message) }
+        update { it.copy(endpoint = nextEndpoint, code = "", role = "", memberId = "", radarEnabled = false, speakerId = null, serverFeatures = emptySet(), guestAdditions = false, pendingGuestSong = "", pendingGuestSongs = emptyList(), connected = false, queue = emptyList(), cars = emptyList(), clockReady = false, driftMs = null, requestedPlaying = false, audioError = "", message = if (clearMessage) "Session left. The host can create a new session for the group." else it.message) }
     }
     fun endSession() { scope.launch { try { withContext(Dispatchers.IO) { request("/sessions/${state.value.code}", "DELETE") }; leave() } catch (e: Exception) { message(e.message ?: "Could not end session") } } }
 }
