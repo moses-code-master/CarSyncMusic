@@ -425,6 +425,10 @@ private val pages = listOf("Home", "Music Library", "Playlists", "Create Session
                                 }
                             }
                         }
+                        Title("Convoy radio", "Host and guests take turns speaking while music ducks smoothly. Android voice DSP is enabled when available.")
+                        Text("Audio transport: ${if (s.supportsCompactRadio) "Compact G.711 μ-law (50% smaller raw voice frames)" else if (s.supportsVoice) "Compatible PCM16" else "Intercom unavailable until connected"}", color = Muted)
+                        Text(s.radioStatus, color = Muted, fontSize = 12.sp)
+                        Text("Microphone routing follows Android's selected input device; Bluetooth speaker/microphone quality depends on head-unit hardware. This is a test radio, not an emergency service.", color = Muted, fontSize = 12.sp)
                         Title("Setup & playback", "Use HTTPS for mobile data. Use a private Wi-Fi server address on a shared hotspot.")
                         SettingToggle("Driving mode", s.driving, "Hides library, session setup and complex controls. Park before disabling; automatic vehicle-speed detection is unavailable.") { sync.driving(it); if (it) page = "Now Playing" }
                         if (!s.driving) {
