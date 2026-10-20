@@ -85,7 +85,7 @@ class SyncCoordinator(private val context: Context, val dao: LibraryDao, prefere
         update { it.copy(radarEnabled = started) }
     }
     fun pttRequest() {
-        if (!state.value.connected || state.value.driving) return
+        if (!state.value.connected) return
         if (!state.value.supportsVoice) { message("Intercom needs the newer convoy server. Update your Render deployment or use the matching local backend."); return }
         if (!ConvoyForeground.startMicrophone(context)) {
             message("Microphone service could not start. Open CarSync and try again.")
