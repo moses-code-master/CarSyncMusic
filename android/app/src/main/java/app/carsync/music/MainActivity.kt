@@ -189,13 +189,24 @@ private val pages = listOf("Home", "Music Library", "Playlists", "Create Session
                             LargeButton("Clear") { selected = emptyList() }
                         }
                         LazyColumn(Modifier.fillMaxWidth().height(360.dp), verticalArrangement = Arrangement.spacedBy(10.dp)) { items(s.library.filter { it.mediaType == "audio" && "${it.title} ${it.artist} ${it.album}".contains(search, true) }, key = { it.hash }) { t ->
-                            TrackRow(t, t.hash in selected, { sync.playTrack(t.hash); page = "Now Playing" }, { selected = if (t.hash in selected) selected - t.hash else selected + t.hash })
+                            TrackRow(t, t.hash in selected, {
+                                if (s.role == "guest" && s.connected) sync.addGuestSong(t.hash)
+                                else { sync.playTrack(t.hash); page = "Now Playing" }
+                            }, { selected = if (t.hash in selected) selected - t.hash else selected + t.hash })
                         } }
                         Text("${selected.size} selected · selection order becomes playlist order", color = Accent)
                         OutlinedTextField(playlistName, { playlistName = it }, label = { Text("Playlist name") }, modifier = Modifier.fillMaxWidth())
                         LargeButton("Save playlist", selected.isNotEmpty()) { sync.savePlaylist(playlistName, selected, editId); editId = 0; page = "Playlists" }
                         LargeButton("Listen locally", selected.isNotEmpty()) { sync.listenLocal(selected); page = "Now Playing" }
                         LargeButton("Publish to session", selected.isNotEmpty() && s.role == "host") { sync.publish(selected); page = "Now Playing" }
+                        if (s.role == "guest" && s.connected) {
+                            Text("Guest music: select one local MP3 to add it to the shared queue.", color = Muted)
+                            LargeButton("Add MP3 to shared queue", selected.size == 1 && s.supportsGuestMusic && s.guestAdditions && s.sharing && !s.busy && !s.driving) {
+                                sync.addGuestSong(selected.first())
+                            }
+                            if (!s.supportsGuestMusic) Text("The session server needs the guest music upgrade.", color = Color(0xFFFFBF7A))
+                            else if (!s.sharing || !s.guestAdditions) Text("Ask the host to enable music sharing and guest song additions in Settings.", color = Muted)
+                        }
                     }
                     "Playlists" -> {
                         Title("Road trip playlists", "Save, rename, reorder or publish. Publishing resets playback to the first track.")
@@ -256,18 +267,19 @@ private val pages = listOf("Home", "Music Library", "Playlists", "Create Session
                         NowPlaying(s, sync)
                         if (s.connected) {
                             Text("Convoy Intercom", fontSize = 22.sp, fontWeight = FontWeight.Bold)
-                            Text(if (s.speakerId != null) "Speaker active" else "Channel available", color = Muted)
-                            LargeButton("Start talking", s.speakerId == null && !s.driving) {
+                            Text(if (!s.supportsVoice) "Intercom unavailable: old server version" else if (s.speakerId != null) "Speaker active" else "Channel available", color = if (s.supportsVoice) Muted else Color(0xFFFFBF7A))
+                            if (!s.supportsVoice) Text("Upgrade the session server to enable talking from either car. The old Render server only supports synchronized playback.", color = Muted)
+                            LargeButton("Start talking", s.supportsVoice && s.speakerId == null && !s.driving) {
                                 if (ContextCompat.checkSelfPermission(context, Manifest.permission.RECORD_AUDIO) ==
                                     android.content.pm.PackageManager.PERMISSION_GRANTED) sync.pttRequest()
                                 else microphoneRequest.launch(Manifest.permission.RECORD_AUDIO)
                             }
-                            LargeButton("Stop talking") { sync.pttRelease() }
+                            LargeButton("Stop talking", s.speakerId == s.memberId) { sync.pttRelease() }
                             Text("Only use interactive intercom controls while parked or as a passenger.", color = Muted)
                             if (!s.driving) {
                                 Text("Vote for an upcoming song", fontSize = 18.sp)
                                 s.queue.drop(s.index + 1).forEach { track ->
-                                    LargeButton("${track.title} · ${s.votes[track.hash] ?: 0} votes") { sync.voteTrack(track.hash) }
+                                    LargeButton("${track.title} · ${s.votes[track.hash] ?: 0} votes", "convoy_votes_v1" in s.serverFeatures) { sync.voteTrack(track.hash) }
                                 }
                             }
                         }
@@ -291,7 +303,7 @@ private val pages = listOf("Home", "Music Library", "Playlists", "Create Session
                             else Text(if (car.buffered) "Audio ready" else "Preparing / buffering", color = Muted)
                         } } }
                         if (s.cars.isEmpty()) Text("Create or join a session to see the host and all guests.")
-                        LargeButton(if (s.radarEnabled) "Stop location sharing" else "Share live convoy location", s.connected && (!s.driving || s.radarEnabled)) {
+                        LargeButton(if (s.radarEnabled) "Stop location sharing" else "Share live convoy location", s.connected && s.supportsRadar && (!s.driving || s.radarEnabled)) {
                             if (s.radarEnabled) sync.toggleRadar(false)
                             else if (ContextCompat.checkSelfPermission(context, Manifest.permission.ACCESS_FINE_LOCATION) ==
                                 android.content.pm.PackageManager.PERMISSION_GRANTED ||
@@ -300,6 +312,7 @@ private val pages = listOf("Home", "Music Library", "Playlists", "Create Session
                             else locationRequest.launch(arrayOf(Manifest.permission.ACCESS_FINE_LOCATION, Manifest.permission.ACCESS_COARSE_LOCATION))
                         }
                         Text("Location is opt-in and only transmitted during a session.", color = Muted)
+                        if (s.connected && !s.supportsRadar) Text("GPS radar requires the updated convoy server.", color = Color(0xFFFFBF7A))
                     }
                     "Settings" -> {
                         if (!s.driving) LargeButton("About CarSync Music") { page = "About" }
@@ -330,7 +343,8 @@ private val pages = listOf("Home", "Music Library", "Playlists", "Create Session
                             if (s.acousticProbeMs != null) Text("Diagnostic loopback: ${s.acousticProbeMs} ms. This includes microphone delay; not an automatic synchronization adjustment.", color = Muted)
                             Text("A device with more output delay starts earlier. Compare recordings from both speakers and adjust this value while parked.", color = Muted)
                             if (s.role == "host") {
-                                SettingToggle("Guest playback controls", s.guestControls, "Allow all guests to play, pause, skip and seek for the whole session.") { sync.settings(guestControls = it) }
+                                SettingToggle("Guest playback controls", s.guestControls, "Allow guests to play, pause, skip and seek. Intercom is separate and always available when the backend supports it.") { sync.settings(guestControls = it) }
+                                if (s.supportsGuestMusic) SettingToggle("Allow guests to add MP3 songs", s.guestAdditions, "Guests can upload their own authorized MP3s to the end of your session queue. Requires audio sharing enabled.") { sync.settings(guestAdditions = it) }
                                 SettingToggle("I have permission to share this audio", s.sharing, "Opt in only for audio you may lawfully share. Each MP3 uploads once to your server, then every guest can stream it. Revoking stops guest relay playback.") { sync.settings(sharing = it) }
                                 LargeButton("Upload current playlist to relay", s.sharing && !s.busy) { sync.uploadMissingAudio() }
                                 LargeButton("Export synchronization telemetry") { launchPickerSafely({ metricsExport.launch("carsync-${s.code}-metrics.csv") }) { sync.message("This device has no working file picker for saving reports.") } }
