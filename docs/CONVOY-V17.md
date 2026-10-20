@@ -35,3 +35,29 @@ The Node relay advertises itself over mDNS only if `CARSYNC_LAN_DISCOVERY=1` is 
 ## Release gate
 
 This branch stays a draft until: backend tests, Android unit tests, Android lint and emulator checks pass; two physical head units complete playback, PTT, reconnection and permission-denial exercises; speaker volume restores after voice frames; location opt-out propagates; microphone and GPS stop after exit. No device tests were performed merely by generating this source.
+
+## Why new controls appeared but did not work
+
+Old CarSync backends support playback, session codes and MP3 host uploads, but **not** convoy PTT, location sharing, voting or guest songs. The Android app used `https://carsync-music.onrender.com` by default, while GitHub Actions only built/tested the branch: it **never deployed this experimental server**. This is a server/client version mismatch, not proof that the phones are incapable of talking.
+
+The updated session snapshot includes `capabilities`, and `GET /health` responds with `{"ok":true,"protocol":"convoy-v1","capabilities":[...]}`. When the app connects to an older server, it explicitly labels convoy features unavailable instead of showing misleading buttons. **Update the server and both APKs together**.
+
+## Two-phone verification with a separate development server
+
+1. Install Node.js 24 on a laptop, and check out the **feature/convoy-v17-hardened** branch; do not use the older `main` backend.
+2. Connect the laptop and two Android phones to the same trusted Wi-Fi. In `backend`, execute `npm ci` and `npm start`. The server defaults to TCP port 8080.
+3. On both phones, open Settings and set the server to `http://<LAPTOP_LAN_IP>:8080`. Use a real laptop IPv4 address, not `127.0.0.1`. The cloud URL requires a separately deployed updated backend. On the laptop, open `http://localhost:8080/health` and confirm `"protocol":"convoy-v1"`.
+4. On Phone A, create a new session. On Phone B, enter the six-digit code. Confirm both devices show connected and report no server upgrade warning.
+5. While parked, on **either phone** choose Now Playing → Start talking, grant microphone permission, and check the other phone's speaker. Voice frames travel through the server; guest playback-control settings are unrelated to speech permission. Press Stop talking to release the voice floor.
+6. For guest MP3s: on Phone A enable Settings → “I have permission to share this audio” and “Allow guests to add MP3 songs.” On Phone B use Music Library → Import files, select an MP3, then choose “Add MP3 to shared queue.” The server checks the file's SHA-256 and only adds it after a successful upload, so cloud tests incur mobile data traffic. Guest playback controls (play/pause/skip) remain **a separate, optional host setting**.
+7. If needed, enable Settings → Guest playback controls on Phone A to allow both phones to play, pause, skip and seek.
+8. Location sharing is optional on each device. Each must grant location permission. Turn it off before leaving the session.
+
+### Deployment requirements and remaining limitations
+
+- Don't deploy feature tests to production Render without a separate staging service and a backup plan. Updating an Android APK alone cannot update the backend.
+- When creating a new Render Web Service from GitHub, select branch `feature/convoy-v17-hardened`, use the repository `backend/Dockerfile`, and verify its `/health` capabilities. If the platform deploys from main, it will serve the **older** protocol again.
+- Local auto-discovery requires `CARSYNC_LAN_DISCOVERY=1` in the backend process and UDP multicast 5353 to traverse Wi-Fi; you can use the explicit server address when discovery fails.
+- The intercom still uses PCM16 over WebSocket and lacks Opus, production echo testing and guaranteed foreground-device microphone support. This is not a safety-critical radio.
+- The host must approve guest uploads by opting into sharing and guest contributions; guests do not receive admin privileges. Audio must be owned or shared with permission.
+- On Render free storage, uploaded media and sessions can disappear on restart/redeploy. Test with short MP3 files first.
