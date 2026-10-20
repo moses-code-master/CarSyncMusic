@@ -139,6 +139,7 @@ private val pages = listOf("Home", "Music Library", "Playlists", "Create Session
                     Column(Modifier.weight(1f)) {
                         Text(CreatorBrand.PRODUCT, fontWeight = FontWeight.Bold, fontSize = 22.sp, maxLines = 1, overflow = TextOverflow.Ellipsis)
                         Text(CreatorBrand.SIGNATURE, color = Accent, fontSize = 12.sp)
+                        Text("v${BuildConfig.VERSION_NAME}", color = Muted, fontSize = 11.sp)
                     }
                     Text(if (s.connected) "● ${s.role.uppercase()} · ${s.code}" else if (s.role == "local") "LOCAL PLAYBACK" else "● OFFLINE", fontSize = 12.sp, color = if (s.connected) Accent else Muted)
                 }
@@ -162,6 +163,7 @@ private val pages = listOf("Home", "Music Library", "Playlists", "Create Session
                     "Home" -> {
                         Card(colors = CardDefaults.cardColors(containerColor = Color(0xFF243B28)), shape = RoundedCornerShape(28.dp)) { Column(Modifier.padding(24.dp), verticalArrangement = Arrangement.spacedBy(12.dp)) {
                             Text("YOUR ROAD. YOUR SOUND.", color = Accent, fontSize = 12.sp, fontWeight = FontWeight.Bold)
+                            Text("CarSync v${BuildConfig.VERSION_NAME}", color = Color(0xFFCEDACD), fontSize = 13.sp)
                             Text(CreatorBrand.WELCOME_CREDIT, color = Accent, fontSize = 16.sp, fontWeight = FontWeight.Medium)
                             Text("Good music.\nShared miles.", fontSize = 38.sp, lineHeight = 44.sp, fontWeight = FontWeight.Bold)
                             Text("Play your phone’s MP3s instantly. Share the journey with multiple guest cars.", color = Color(0xFFCEDACD), fontSize = 18.sp)
