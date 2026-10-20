@@ -149,6 +149,11 @@ fun ConvoyDashboard(
             Text(if (channelBusy) "Listening automatically · wait until the channel is free." else "Listening automatically · microphone access is needed only to talk.",
                 color = BoardMuted, fontSize = 11.sp)
         }
+        if (intercomReady) {
+            Text(if (state.supportsCompactRadio) "RADIO · Compact voice · noise / echo reduction when supported" else
+                "RADIO · Standard voice compatibility mode",
+                color = BoardMuted, fontSize = 10.sp)
+        }
         Row(Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.spacedBy(7.dp)) {
             DashboardShortcut("▧", "Live Map", Modifier.weight(1f), !state.driving, onMap)
             DashboardShortcut("☷", "Playlist", Modifier.weight(1f), !state.driving, onPlaylist)
