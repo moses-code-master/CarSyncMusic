@@ -142,9 +142,9 @@ fun ConvoyDashboard(
                 color = BoardMuted, fontSize = 11.sp)
         }
         Row(Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.spacedBy(7.dp)) {
-            DashboardShortcut("▧", "Live Map", Modifier.weight(1f), onMap)
-            DashboardShortcut("☷", "Playlist", Modifier.weight(1f), onPlaylist)
-            DashboardShortcut("♙", "Cars", Modifier.weight(1f), onCars)
+            DashboardShortcut("▧", "Live Map", Modifier.weight(1f), !state.driving, onMap)
+            DashboardShortcut("☷", "Playlist", Modifier.weight(1f), !state.driving, onPlaylist)
+            DashboardShortcut("♙", "Cars", Modifier.weight(1f), true, onCars)
         }
     }
 }
@@ -160,11 +160,11 @@ private fun ConvoyStat(value: String, subtitle: String, modifier: Modifier = Mod
 }
 
 @Composable
-private fun DashboardShortcut(symbol: String, text: String, modifier: Modifier = Modifier, action: () -> Unit) {
-    Column(modifier.background(BoardPanel, RoundedCornerShape(9.dp)).clickable(onClick = action)
+private fun DashboardShortcut(symbol: String, text: String, modifier: Modifier = Modifier, enabled: Boolean = true, action: () -> Unit) {
+    Column(modifier.background(BoardPanel, RoundedCornerShape(9.dp)).clickable(enabled = enabled, onClick = action)
         .heightIn(min = 74.dp).padding(horizontal = 3.dp, vertical = 11.dp),
         horizontalAlignment = Alignment.CenterHorizontally, verticalArrangement = Arrangement.SpaceEvenly) {
-        Text(symbol, color = BoardWhite, fontSize = 20.sp)
-        Text(text, color = BoardWhite, fontSize = 12.sp, maxLines = 1)
+        Text(symbol, color = if (enabled) BoardWhite else BoardMuted, fontSize = 20.sp)
+        Text(text, color = if (enabled) BoardWhite else BoardMuted, fontSize = 12.sp, maxLines = 1)
     }
 }
