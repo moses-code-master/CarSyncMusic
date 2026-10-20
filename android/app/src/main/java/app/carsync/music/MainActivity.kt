@@ -133,7 +133,7 @@ private val pages = listOf("Home", "Music Library", "Playlists", "Create Session
     val colors = darkColorScheme(primary = Accent, onPrimary = Color(0xFF162609), background = Color(0xFF0B1016), surface = Panel, onSurface = Color(0xFFF2F5FA), secondary = Color(0xFF92BFFF))
     MaterialTheme(colorScheme = colors) {
         Scaffold(topBar = {
-            Column(Modifier.background(Color(0xFF0C1017)).statusBarsPadding().padding(horizontal = 20.dp, vertical = 10.dp)) {
+            if (page != "Home") Column(Modifier.background(Color(0xFF0C1017)).statusBarsPadding().padding(horizontal = 20.dp, vertical = 10.dp)) {
                 Row(verticalAlignment = Alignment.CenterVertically) {
                     Icon(painterResource(R.drawable.ic_wave), null, tint = Accent, modifier = Modifier.size(34.dp)); Spacer(Modifier.width(12.dp))
                     Column(Modifier.weight(1f)) {
@@ -147,7 +147,7 @@ private val pages = listOf("Home", "Music Library", "Playlists", "Create Session
         }, bottomBar = {
             Column(Modifier.fillMaxWidth().background(Panel)) {
                 if (s.busy) LinearProgressIndicator(Modifier.fillMaxWidth())
-                Text(s.message, color = if (s.audioError.isNotBlank()) Color(0xFFFFB19F) else Muted, fontSize = 13.sp, maxLines = 3, modifier = Modifier.padding(horizontal = 16.dp, vertical = 8.dp))
+                Text(s.message, color = if (s.audioError.isNotBlank()) Color(0xFFFFB19F) else Muted, fontSize = if (page == "Home") 11.sp else 13.sp, maxLines = if (page == "Home") 1 else 3, overflow = TextOverflow.Ellipsis, modifier = Modifier.padding(horizontal = 16.dp, vertical = if (page == "Home") 4.dp else 8.dp))
                 NavigationBar(containerColor = Color(0xFF10171F)) {
                     val nav = listOf("Home" to Icons.Default.Home, "Music Library" to Icons.Default.List, "Videos" to Icons.Default.PlayArrow, "Now Playing" to Icons.Default.PlayArrow, "Create Session" to Icons.Default.Share, "Settings" to Icons.Default.Settings)
                     val labels = mapOf("Home" to "Home", "Music Library" to "Library", "Videos" to "Videos", "Now Playing" to "Player", "Create Session" to "Session", "Settings" to "Settings")
@@ -155,28 +155,23 @@ private val pages = listOf("Home", "Music Library", "Playlists", "Create Session
                 }
             }
         }) { insets ->
-            Column(Modifier.fillMaxSize().padding(insets).verticalScroll(pageScroll).padding(20.dp), verticalArrangement = Arrangement.spacedBy(16.dp)) {
-                if (page == "Home") IntercomPanel(s, sync, { microphoneRequest.launch(Manifest.permission.RECORD_AUDIO) }, { page = "Create Session" })
-                if (s.driving && page !in listOf("Now Playing", "Connected Cars", "Settings")) { Text("Driving mode: only playback and connection status are available."); LargeButton("Now Playing") { page = "Now Playing" } }
+            Column(Modifier.fillMaxSize().padding(insets).verticalScroll(pageScroll).padding(if (page == "Home") 8.dp else 20.dp), verticalArrangement = Arrangement.spacedBy(if (page == "Home") 6.dp else 16.dp)) {
+                if (s.driving && page !in listOf("Home", "Now Playing", "Connected Cars", "Settings")) { Text("Driving mode: only playback and connection status are available."); LargeButton("Now Playing") { page = "Now Playing" } }
                 else when (page) {
                     "Home" -> {
-                        Card(colors = CardDefaults.cardColors(containerColor = Color(0xFF243B28)), shape = RoundedCornerShape(28.dp)) { Column(Modifier.padding(24.dp), verticalArrangement = Arrangement.spacedBy(12.dp)) {
-                            Text("YOUR ROAD. YOUR SOUND.", color = Accent, fontSize = 12.sp, fontWeight = FontWeight.Bold)
-                            Text(CreatorBrand.WELCOME_CREDIT, color = Accent, fontSize = 16.sp, fontWeight = FontWeight.Medium)
-                            Text("Good music.\nShared miles.", fontSize = 38.sp, lineHeight = 44.sp, fontWeight = FontWeight.Bold)
-                            Text("Play your phone’s MP3s instantly. Share the journey with multiple guest cars.", color = Color(0xFFCEDACD), fontSize = 18.sp)
-                            LargeButton("Find music on this phone", !s.busy) { scan(); page = "Music Library" }
-                        } }
-                        ConvoyOverview(s, { page = "Connected Cars" }, { page = "Create Session" })
-                        Row(Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.spacedBy(12.dp)) {
-                            Stat("LIBRARY", "${s.library.count { it.mediaType == "audio" }} tracks", Modifier.weight(1f)); Stat("SESSION", if (s.code.isBlank()) "Ready to connect" else s.code, Modifier.weight(1f))
-                        }
-                        LargeButton("Create a listening session", enabled = !s.busy) { page = "Create Session" }
-                        LargeButton("Join the other car") { page = "Join Session" }
-                        LargeButton("Open music library") { page = "Music Library" }
-                        LargeButton("Open videos · parked viewing") { page = "Videos" }
-                        if (s.library.isNotEmpty() && s.track == null) s.library.filter { it.mediaType == "audio" }.take(4).forEach { track -> TrackRow(track, false, { sync.playTrack(track.hash); page = "Now Playing" }, {}) }
-                        if (s.track != null) NowPlaying(s, sync)
+                        ConvoyDashboard(s,
+                            onTalk = {
+                                if (s.speakerId == s.memberId && s.memberId.isNotBlank() || s.talkPending) sync.pttRelease()
+                                else if (ContextCompat.checkSelfPermission(context, Manifest.permission.RECORD_AUDIO) ==
+                                    android.content.pm.PackageManager.PERMISSION_GRANTED) sync.pttRequest()
+                                else microphoneRequest.launch(Manifest.permission.RECORD_AUDIO)
+                            },
+                            onSession = { page = "Create Session" },
+                            onMap = { page = "Live Map" },
+                            onPlaylist = { page = if (s.connected) "Now Playing" else "Music Library" },
+                            onCars = { page = "Connected Cars" },
+                            onPlayer = { page = "Now Playing" }
+                        )
                     }
                     "Music Library" -> {
                         Title("Your music", "Tap any song to play. Scan your phone or import from a folder, USB or SD card.")
@@ -279,6 +274,7 @@ private val pages = listOf("Home", "Music Library", "Playlists", "Create Session
                             }
                         }
                     }
+                    "Live Map" -> { LiveConvoyMap(s, sync, { page = "Connected Cars" }, { page = "Home" }, { locationRequest.launch(arrayOf(Manifest.permission.ACCESS_FINE_LOCATION, Manifest.permission.ACCESS_COARSE_LOCATION)) }) }
                     "Connected Cars" -> {
                         Title("Travelling together", "Drift is measured against the server timeline; it does not measure speaker or Bluetooth delay.")
                         if (s.connected) Text("${s.cars.count { it.role == "guest" && it.online }} guests online · ${s.cars.count { it.role == "guest" }}/${s.maxGuests} guest places used", color = Accent, fontSize = 20.sp)

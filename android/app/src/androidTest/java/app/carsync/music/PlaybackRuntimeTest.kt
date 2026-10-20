@@ -54,6 +54,24 @@ class PlaybackRuntimeTest {
         await("Library did not load") { sync.state.value.library.any { it.hash == track.hash } }
     }
     @After fun cleanup() { main { sync.leave() }; scenario.close() }
+    @Test fun convoyHomeShowsDashboardShortcutsWithoutScrolling() {
+        val device = UiDevice.getInstance(instrumentation)
+        assertTrue(device.findObject(UiSelector().text("CarSync Convoy")).waitForExists(5000))
+        for (label in listOf("Cars online", "Farthest car", "Intercom", "PUSH TO TALK", "Now Playing",
+            "Live Map", "Playlist", "Cars")) {
+            val element = device.findObject(UiSelector().text(label))
+            assertTrue("Missing Home dashboard control: $label", element.waitForExists(5000))
+        }
+        val mapShortcut = device.findObject(UiSelector().text("Live Map"))
+        val bottomNavigation = device.findObject(UiSelector().text("Settings"))
+        assertTrue("Live Map shortcut is hidden below the navigation bar",
+            mapShortcut.bounds.bottom < bottomNavigation.bounds.top)
+        mapShortcut.click()
+        assertTrue(device.findObject(UiSelector().text("LIVE CONVOY MAP")).waitForExists(5000))
+        device.findObject(UiSelector().text("Home")).click()
+        assertTrue(device.findObject(UiSelector().text("CarSync Convoy")).waitForExists(5000))
+    }
+
     @Test fun creatorBrandingAndAboutRemainAvailableDuringPlayback() {
         val device = UiDevice.getInstance(instrumentation)
         assertTrue(device.findObject(UiSelector().text("Created by Brayo")).waitForExists(5000))
