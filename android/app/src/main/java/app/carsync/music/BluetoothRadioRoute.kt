@@ -79,6 +79,24 @@ class BluetoothRadioRoute(private val context: Context, private val report: (Str
         }
     }
 
+    /**
+     * Route the voice capture device explicitly when the Bluetooth call session
+     * is active. Do not override the device for normal local music playback.
+     */
+    fun routeMicrophone(record: android.media.AudioRecord) {
+        if (!callRouteOwned || !permissionGranted()) return
+        try {
+            val input = audioManager.getDevices(AudioManager.GET_DEVICES_INPUTS).firstOrNull {
+                it.type == AudioDeviceInfo.TYPE_BLUETOOTH_SCO ||
+                    (Build.VERSION.SDK_INT >= 31 && it.type == AudioDeviceInfo.TYPE_BLE_HEADSET)
+            }
+            if (input != null && !record.setPreferredDevice(input))
+                report("Bluetooth call route selected, but microphone preferred-device selection was rejected.")
+        } catch (e: Exception) {
+            report("Bluetooth microphone routing unavailable: ${e.message.orEmpty()}")
+        }
+    }
+
     fun isCallAudioActive(): Boolean = callRouteOwned
 
     fun release() {
