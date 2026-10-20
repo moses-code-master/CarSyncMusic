@@ -155,6 +155,10 @@ private val pages = listOf("Home", "Music Library", "Playlists", "Create Session
     val microphoneRequest = rememberLauncherForActivityResult(ActivityResultContracts.RequestPermission()) { granted ->
         if (granted) sync.pttRequest() else sync.message("Microphone permission denied.")
     }
+    val bluetoothPermissionRequest = rememberLauncherForActivityResult(ActivityResultContracts.RequestPermission()) { granted ->
+        if (granted) sync.preferBluetoothRadio(true) else sync.message(
+            "Nearby devices permission denied. CarSync can continue using the default microphone.")
+    }
     val acousticRequest = rememberLauncherForActivityResult(ActivityResultContracts.RequestPermission()) { granted ->
         if (granted) sync.measureAcoustics() else sync.message("Microphone permission denied.")
     }
@@ -428,7 +432,18 @@ private val pages = listOf("Home", "Music Library", "Playlists", "Create Session
                         Title("Convoy radio", "Host and guests take turns speaking while music ducks smoothly. Android voice DSP is enabled when available.")
                         Text("Audio transport: ${if (s.supportsCompactRadio) "Compact G.711 μ-law (50% smaller raw voice frames)" else if (s.supportsVoice) "Compatible PCM16" else "Intercom unavailable until connected"}", color = Muted)
                         Text(s.radioStatus, color = Muted, fontSize = 12.sp)
-                        Text("Microphone routing follows Android's selected input device; Bluetooth speaker/microphone quality depends on head-unit hardware. This is a test radio, not an emergency service.", color = Muted, fontSize = 12.sp)
+                        if (!s.driving) SettingToggle(
+                            "Prefer Bluetooth call microphone", s.preferBluetoothRadio,
+                            "Optional for compatible paired car headsets. Bluetooth call mode may reduce music quality. Android defaults remain unchanged when OFF."
+                        ) { enabled ->
+                            if (enabled && Build.VERSION.SDK_INT >= 31 &&
+                                ContextCompat.checkSelfPermission(context, Manifest.permission.BLUETOOTH_CONNECT) !=
+                                    android.content.pm.PackageManager.PERMISSION_GRANTED)
+                                bluetoothPermissionRequest.launch(Manifest.permission.BLUETOOTH_CONNECT)
+                            else sync.preferBluetoothRadio(enabled)
+                        }
+                        Text("Bluetooth call routing is attempted only while another car is speaking or you are talking; it is restored afterward. Requires a Bluetooth call-capable headset and permission. Some stereos cannot provide a Bluetooth call microphone.", color = Muted, fontSize = 12.sp)
+                        Text("This is a test radio, not an emergency service. Never change routing settings while driving.", color = Muted, fontSize = 12.sp)
                         Title("Setup & playback", "Use HTTPS for mobile data. Use a private Wi-Fi server address on a shared hotspot.")
                         SettingToggle("Driving mode", s.driving, "Hides library, session setup and complex controls. Park before disabling; automatic vehicle-speed detection is unavailable.") { sync.driving(it); if (it) page = "Now Playing" }
                         if (!s.driving) {
