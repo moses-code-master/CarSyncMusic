@@ -52,7 +52,7 @@ private val VideoAccent = Color(0xFFB4F36D)
     val permission = rememberLauncherForActivityResult(ActivityResultContracts.RequestPermission()) { if (it) sync.scanVideos() else sync.message("Allow video access, or import with a file picker.") }
     Text("Your videos", fontSize = 30.sp)
     Text("Parked viewing only · by Brayo", color = VideoAccent)
-    Text("MP4, MKV and WebM depend on device codecs. For a group session, import the identical file on every device; videos are not uploaded to the free server.")
+    Text("MP4 can be shared with guests (up to 100 MB per file, available space permitting). MKV/WebM still require identical local files. Video pictures are restricted to parked viewing.")
     Row(Modifier.horizontalScroll(rememberScrollState()), horizontalArrangement = Arrangement.spacedBy(8.dp)) {
         Button(onClick = { launchPickerSafely({ picker.launch(arrayOf("video/*", "application/x-matroska")) }, {
             fallback.launch(Intent(Intent.ACTION_GET_CONTENT).addCategory(Intent.CATEGORY_OPENABLE).setType("*/*").putExtra(Intent.EXTRA_MIME_TYPES, arrayOf("video/*", "application/x-matroska")).putExtra(Intent.EXTRA_ALLOW_MULTIPLE, true).addFlags(Intent.FLAG_GRANT_READ_URI_PERMISSION))
@@ -79,7 +79,12 @@ private val VideoAccent = Color(0xFFB4F36D)
                     Checkbox(t.hash in selected, { selected = if (t.hash in selected) selected - t.hash else (selected + t.hash).take(500) })
                 }
                 Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
-                    Button(onClick = { sync.playTrack(t.hash); onPlayer() }, enabled = s.role != "guest") { Text("Play video") }
+                    Button(onClick = {
+                        if (s.role == "guest" && s.connected) sync.addGuestSong(t.hash)
+                        else { sync.playTrack(t.hash); onPlayer() }
+                    }, enabled = s.role != "guest" || (s.supportsGuestMusic && s.guestAdditions && s.sharing && !s.busy && !s.driving && t.mimeType == "video/mp4")) {
+                        Text(if (s.role == "guest") "Add MP4" else "Play video")
+                    }
                     TextButton(onClick = { sync.removeVideo(t); selected = selected - t.hash }) { Text("Remove record") }
                 }
             } }
@@ -100,6 +105,16 @@ private val VideoAccent = Color(0xFFB4F36D)
     }
     OutlinedTextField(name, { name = it }, label = { Text("Video playlist name") }, modifier = Modifier.fillMaxWidth())
     Text("Selected order · ${selected.size} videos")
+    if (s.role == "guest" && s.connected) {
+        Text("Choose multiple MP4 videos to add them to the shared queue. Other formats cannot be uploaded.", color = VideoAccent)
+        Button(onClick = {
+            sync.addGuestSongs(selected)
+            selected = emptyList()
+        }, enabled = selected.isNotEmpty() && !s.driving && s.supportsGuestMusic && s.guestAdditions && s.sharing && !s.busy && s.pendingGuestSong.isBlank()) {
+            Text("Upload ${selected.size} selected MP4 videos")
+        }
+        if (s.pendingGuestSong.isNotBlank()) Text("Uploading batch · ${s.pendingGuestSongs.size} remaining", color = VideoAccent)
+    }
     selected.forEachIndexed { index, hash -> Row(verticalAlignment = Alignment.CenterVertically) {
         Text(s.library.find { it.hash == hash }?.title ?: "Missing video", Modifier.weight(1f))
         TextButton({ if (index > 0) selected = selected.toMutableList().apply { val item = removeAt(index); add(index - 1, item) } }) { Text("↑") }

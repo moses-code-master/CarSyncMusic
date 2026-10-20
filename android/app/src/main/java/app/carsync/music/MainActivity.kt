@@ -110,6 +110,15 @@ private val pages = listOf("Home", "Music Library", "Playlists", "Create Session
         val permission = if (Build.VERSION.SDK_INT >= 33) Manifest.permission.READ_MEDIA_AUDIO else Manifest.permission.READ_EXTERNAL_STORAGE
         if (ContextCompat.checkSelfPermission(context, permission) == android.content.pm.PackageManager.PERMISSION_GRANTED) sync.scanPhone() else scanPermission.launch(permission)
     }
+    val microphoneRequest = rememberLauncherForActivityResult(ActivityResultContracts.RequestPermission()) { granted ->
+        if (granted) sync.pttRequest() else sync.message("Microphone permission denied.")
+    }
+    val acousticRequest = rememberLauncherForActivityResult(ActivityResultContracts.RequestPermission()) { granted ->
+        if (granted) sync.measureAcoustics() else sync.message("Microphone permission denied.")
+    }
+    val locationRequest = rememberLauncherForActivityResult(ActivityResultContracts.RequestMultiplePermissions()) { result ->
+        if (result.values.any { it }) sync.toggleRadar(true) else sync.message("Location permission denied.")
+    }
     val metricsExport = rememberLauncherForActivityResult(ActivityResultContracts.CreateDocument("text/csv")) { uri -> if (uri != null) sync.exportMetrics(uri) }
     val qrImport = rememberLauncherForActivityResult(ActivityResultContracts.OpenDocument()) { uri ->
         if (uri != null) try {
@@ -147,6 +156,7 @@ private val pages = listOf("Home", "Music Library", "Playlists", "Create Session
             }
         }) { insets ->
             Column(Modifier.fillMaxSize().padding(insets).verticalScroll(pageScroll).padding(20.dp), verticalArrangement = Arrangement.spacedBy(16.dp)) {
+                if (page == "Home") IntercomPanel(s, sync, { microphoneRequest.launch(Manifest.permission.RECORD_AUDIO) }, { page = "Create Session" })
                 if (s.driving && page !in listOf("Now Playing", "Connected Cars", "Settings")) { Text("Driving mode: only playback and connection status are available."); LargeButton("Now Playing") { page = "Now Playing" } }
                 else when (page) {
                     "Home" -> {
@@ -180,13 +190,26 @@ private val pages = listOf("Home", "Music Library", "Playlists", "Create Session
                             LargeButton("Clear") { selected = emptyList() }
                         }
                         LazyColumn(Modifier.fillMaxWidth().height(360.dp), verticalArrangement = Arrangement.spacedBy(10.dp)) { items(s.library.filter { it.mediaType == "audio" && "${it.title} ${it.artist} ${it.album}".contains(search, true) }, key = { it.hash }) { t ->
-                            TrackRow(t, t.hash in selected, { sync.playTrack(t.hash); page = "Now Playing" }, { selected = if (t.hash in selected) selected - t.hash else selected + t.hash })
+                            TrackRow(t, t.hash in selected, {
+                                if (s.role == "guest" && s.connected) sync.addGuestSong(t.hash)
+                                else { sync.playTrack(t.hash); page = "Now Playing" }
+                            }, { selected = if (t.hash in selected) selected - t.hash else selected + t.hash })
                         } }
                         Text("${selected.size} selected · selection order becomes playlist order", color = Accent)
                         OutlinedTextField(playlistName, { playlistName = it }, label = { Text("Playlist name") }, modifier = Modifier.fillMaxWidth())
                         LargeButton("Save playlist", selected.isNotEmpty()) { sync.savePlaylist(playlistName, selected, editId); editId = 0; page = "Playlists" }
                         LargeButton("Listen locally", selected.isNotEmpty()) { sync.listenLocal(selected); page = "Now Playing" }
                         LargeButton("Publish to session", selected.isNotEmpty() && s.role == "host") { sync.publish(selected); page = "Now Playing" }
+                        if (s.role == "guest" && s.connected) {
+                            Text("Guest music: select multiple MP3s and add them to the session queue in one batch.", color = Muted)
+                            LargeButton("Add ${selected.size} selected MP3s", selected.isNotEmpty() && s.supportsGuestMusic && s.guestAdditions && s.sharing && !s.busy && !s.driving && s.pendingGuestSong.isBlank()) {
+                                sync.addGuestSongs(selected)
+                                selected = emptyList()
+                            }
+                            if (s.pendingGuestSong.isNotBlank()) Text("Uploading batch · ${s.pendingGuestSongs.size} waiting", color = Accent)
+                            if (!s.supportsGuestMusic) Text("The session server needs the guest music upgrade.", color = Color(0xFFFFBF7A))
+                            else if (!s.sharing || !s.guestAdditions) Text("Ask the host to enable music sharing and guest song additions in Settings.", color = Muted)
+                        }
                     }
                     "Playlists" -> {
                         Title("Road trip playlists", "Save, rename, reorder or publish. Publishing resets playback to the first track.")
@@ -243,21 +266,61 @@ private val pages = listOf("Home", "Music Library", "Playlists", "Create Session
                         if (endpoint != s.endpoint && endpoint.isNotBlank()) { Text("QR suggests server: $endpoint", color = Accent); LargeButton("Review in Settings") { page = "Settings" } }
                     }
                     "Videos" -> VideoLibraryScreen(s, sync) { page = "Now Playing" }
-                    "Now Playing" -> NowPlaying(s, sync)
+                    "Now Playing" -> {
+                        NowPlaying(s, sync)
+                        IntercomPanel(s, sync, { microphoneRequest.launch(Manifest.permission.RECORD_AUDIO) }, { page = "Create Session" })
+                        if (s.connected) {
+                            if (!s.driving) {
+                                Text("Vote for an upcoming song", fontSize = 18.sp)
+                                s.queue.drop(s.index + 1).forEach { track ->
+                                    LargeButton("${track.title} · ${s.votes[track.hash] ?: 0} votes", "convoy_votes_v1" in s.serverFeatures) { sync.voteTrack(track.hash) }
+                                }
+                            }
+                        }
+                    }
                     "Connected Cars" -> {
                         Title("Travelling together", "Drift is measured against the server timeline; it does not measure speaker or Bluetooth delay.")
                         if (s.connected) Text("${s.cars.count { it.role == "guest" && it.online }} guests online · ${s.cars.count { it.role == "guest" }}/${s.maxGuests} guest places used", color = Accent, fontSize = 20.sp)
+                        val ownPosition = s.cars.find { it.memberId == s.memberId }?.location
                         s.cars.forEach { car -> Card(Modifier.fillMaxWidth()) { Column(Modifier.padding(20.dp), verticalArrangement = Arrangement.spacedBy(8.dp)) {
                             Text("${if (car.online) "●" else "○"} ${car.name}", color = if (car.online) Accent else Muted, fontSize = 26.sp)
                             Text("${car.role.uppercase()} · ${if (car.online) "Connected" else "Reconnecting / offline"}")
                             Text("Player drift: ${car.driftMs?.let { "$it ms" } ?: "Measuring"} · network RTT: ${car.rttMs?.let { "$it ms" } ?: "—"}", color = Muted)
+                            if (car.memberId != s.memberId) {
+                                val distance = ConvoyGeometry.separationMeters(ownPosition, car.location, System.currentTimeMillis())
+                                if (distance != null) {
+                                    Text("Straight-line separation: ${ConvoyGeometry.label(distance)}", color = if (ConvoyGeometry.alert(distance)) Color(0xFFFFBF7A) else Accent)
+                                    if (ConvoyGeometry.alert(distance)) Text("Convoy gap above 2.5 km. Check your agreed meeting point.", color = Color(0xFFFFBF7A))
+                                } else Text("Gap unavailable until both vehicles share accurate GPS.", color = Muted)
+                            }
                             if (car.missing) Text("Needs matching MP3 or permitted audio relay", color = Color(0xFFFFBF7A))
                             else Text(if (car.buffered) "Audio ready" else "Preparing / buffering", color = Muted)
                         } } }
                         if (s.cars.isEmpty()) Text("Create or join a session to see the host and all guests.")
+                        LargeButton(if (s.radarEnabled) "Stop location sharing" else "Share live convoy location", s.connected && s.supportsRadar && (!s.driving || s.radarEnabled)) {
+                            if (s.radarEnabled) sync.toggleRadar(false)
+                            else if (ContextCompat.checkSelfPermission(context, Manifest.permission.ACCESS_FINE_LOCATION) ==
+                                android.content.pm.PackageManager.PERMISSION_GRANTED ||
+                                ContextCompat.checkSelfPermission(context, Manifest.permission.ACCESS_COARSE_LOCATION) ==
+                                android.content.pm.PackageManager.PERMISSION_GRANTED) sync.toggleRadar(true)
+                            else locationRequest.launch(arrayOf(Manifest.permission.ACCESS_FINE_LOCATION, Manifest.permission.ACCESS_COARSE_LOCATION))
+                        }
+                        Text("Location is opt-in and only transmitted during a session.", color = Muted)
+                        if (s.connected && !s.supportsRadar) Text("GPS radar requires the updated convoy server.", color = Color(0xFFFFBF7A))
                     }
                     "Settings" -> {
                         if (!s.driving) LargeButton("About CarSync Music") { page = "About" }
+                        if (!s.driving) {
+                            LargeButton("Find nearby CarSync server") { sync.beginDiscovery() }
+                            if (s.discoveredServer.isNotBlank()) {
+                                Text("Nearby server: ${s.discoveredServer}", color = Accent)
+                                LargeButton("Use discovered server", s.code.isBlank()) {
+                                    endpoint = s.discoveredServer
+                                    try { sync.configure(endpoint, carName) } catch (e: Exception) { sync.message(e.message ?: "Invalid server") }
+                                    sync.stopDiscovery()
+                                }
+                            }
+                        }
                         Title("Setup & playback", "Use HTTPS for mobile data. Use a private Wi-Fi server address on a shared hotspot.")
                         SettingToggle("Driving mode", s.driving, "Hides library, session setup and complex controls. Park before disabling; automatic vehicle-speed detection is unavailable.") { sync.driving(it); if (it) page = "Now Playing" }
                         if (!s.driving) {
@@ -266,9 +329,16 @@ private val pages = listOf("Home", "Music Library", "Playlists", "Create Session
                             LargeButton("Save server & car name", s.code.isBlank()) { try { sync.configure(endpoint, carName) } catch (e: Exception) { sync.message(e.message ?: "Invalid server") } }
                             OutlinedTextField(latency, { latency = it.filter(Char::isDigit).take(4) }, label = { Text("Local output latency compensation · 0–2000 ms") }, modifier = Modifier.fillMaxWidth())
                             LargeButton("Save calibration") { sync.latency(latency.toLongOrNull() ?: 0) }
+                            LargeButton("Measure speaker-to-mic delay (parked)", !s.busy && !s.driving && !s.playing) {
+                                if (ContextCompat.checkSelfPermission(context, Manifest.permission.RECORD_AUDIO) ==
+                                    android.content.pm.PackageManager.PERMISSION_GRANTED) sync.measureAcoustics()
+                                else acousticRequest.launch(Manifest.permission.RECORD_AUDIO)
+                            }
+                            if (s.acousticProbeMs != null) Text("Diagnostic loopback: ${s.acousticProbeMs} ms. This includes microphone delay; not an automatic synchronization adjustment.", color = Muted)
                             Text("A device with more output delay starts earlier. Compare recordings from both speakers and adjust this value while parked.", color = Muted)
                             if (s.role == "host") {
-                                SettingToggle("Guest playback controls", s.guestControls, "Allow all guests to play, pause, skip and seek for the whole session.") { sync.settings(guestControls = it) }
+                                SettingToggle("Guest playback controls", s.guestControls, "Allow guests to play, pause, skip and seek. Intercom is separate and always available when the backend supports it.") { sync.settings(guestControls = it) }
+                                if (s.supportsGuestMusic) SettingToggle("Allow guest music & MP4 contributions", s.guestAdditions, "Guests can contribute selected MP3s and MP4 videos, up to server storage and queue limits. Requires media sharing.") { sync.settings(guestAdditions = it) }
                                 SettingToggle("I have permission to share this audio", s.sharing, "Opt in only for audio you may lawfully share. Each MP3 uploads once to your server, then every guest can stream it. Revoking stops guest relay playback.") { sync.settings(sharing = it) }
                                 LargeButton("Upload current playlist to relay", s.sharing && !s.busy) { sync.uploadMissingAudio() }
                                 LargeButton("Export synchronization telemetry") { launchPickerSafely({ metricsExport.launch("carsync-${s.code}-metrics.csv") }) { sync.message("This device has no working file picker for saving reports.") } }
@@ -285,6 +355,39 @@ private val pages = listOf("Home", "Music Library", "Playlists", "Create Session
                     "License" -> { LargeButton("Back to About") { page = "About" }; ProjectLicenseScreen() }
                 }
             }
+        }
+    }
+}
+
+@Composable private fun IntercomPanel(s: AppState, sync: SyncCoordinator, requestPermission: () -> Unit, openSession: () -> Unit) {
+    val context = androidx.compose.ui.platform.LocalContext.current
+    val isSpeaking = s.speakerId == s.memberId && s.memberId.isNotBlank()
+    val anotherSpeaker = s.speakerId != null && !isSpeaking
+    Card(colors = CardDefaults.cardColors(containerColor = Panel), shape = RoundedCornerShape(20.dp)) {
+        Column(Modifier.fillMaxWidth().padding(20.dp), verticalArrangement = Arrangement.spacedBy(10.dp)) {
+            Text("CAR-TO-CAR INTERCOM", color = Accent, fontSize = 14.sp, fontWeight = FontWeight.Bold)
+            Text(when {
+                !s.connected -> "Connect both cars to use Talk & Listen"
+                !s.supportsVoice -> "Server does not support the intercom. Use the convoy test server."
+                isSpeaking -> "You are talking · other cars are listening"
+                anotherSpeaker -> "Listening · another car has the microphone"
+                else -> "Ready to talk · both host and guests can speak"
+            }, color = if (s.connected && s.supportsVoice) Accent else Color(0xFFFFBF7A))
+            if (!s.connected) LargeButton("Create or join a session") { openSession() }
+            else if (!s.supportsVoice) Text("Update the server address in Settings, then reconnect.", color = Muted)
+            Row(horizontalArrangement = Arrangement.spacedBy(10.dp), modifier = Modifier.fillMaxWidth()) {
+                Box(Modifier.weight(1f)) {
+                    LargeButton("Start talking", s.supportsVoice && s.speakerId == null) {
+                        if (ContextCompat.checkSelfPermission(context, Manifest.permission.RECORD_AUDIO) ==
+                            android.content.pm.PackageManager.PERMISSION_GRANTED) sync.pttRequest()
+                        else requestPermission()
+                    }
+                }
+                Box(Modifier.weight(1f)) {
+                    LargeButton("Stop talking", isSpeaking) { sync.pttRelease() }
+                }
+            }
+            Text("Listening is automatic while connected. Allow microphone access to talk. Only operate touchscreen controls while parked or as a passenger.", color = Muted, fontSize = 12.sp)
         }
     }
 }

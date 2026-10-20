@@ -16,30 +16,206 @@ import java.util.UUID
 import kotlin.math.abs
 
 data class RemoteTrack(val hash: String, val title: String, val artist: String, val album: String, val durationMs: Long, val mediaType: String = "audio", val mimeType: String = "audio/mpeg", val sizeBytes: Long = 0, val width: Int = 0, val height: Int = 0)
-data class Car(val name: String, val role: String, val online: Boolean, val driftMs: Long?, val rttMs: Long?, val buffered: Boolean, val missing: Boolean)
+data class Car(
+    val name: String, val role: String, val online: Boolean, val driftMs: Long?,
+    val rttMs: Long?, val buffered: Boolean, val missing: Boolean,
+    val memberId: String = "", val location: ConvoyPosition? = null
+)
 data class AppState(
-    val endpoint: String = "https://carsync-music.onrender.com", val carName: String = "My car", val code: String = "", val role: String = "", val connected: Boolean = false,
-    val library: List<Track> = emptyList(), val playlists: List<SavedPlaylist> = emptyList(), val queue: List<RemoteTrack> = emptyList(), val cars: List<Car> = emptyList(), val maxGuests: Int = 10,
+    val endpoint: String = ServerDefaults.CONVOY_URL, val carName: String = "My car", val code: String = "", val role: String = "", val connected: Boolean = false,
+    val library: List<Track> = emptyList(), val playlists: List<SavedPlaylist> = emptyList(), val queue: List<RemoteTrack> = emptyList(), val cars: List<Car> = emptyList(), val maxGuests: Int = 10, val speakerId: String? = null, val memberId: String = "", val votes: Map<String, Int> = emptyMap(), val radarEnabled: Boolean = false, val discoveredServer: String = "",
     val index: Int = 0, val positionMs: Long = 0, val playing: Boolean = false, val buffering: Boolean = false, val missing: Boolean = false,
     val clockReady: Boolean = false, val driftMs: Long? = null, val rttMs: Long = 0, val volume: Float = 0.8f,
-    val guestControls: Boolean = false, val sharing: Boolean = false, val audioAvailable: Set<String> = emptySet(), val audioManifestKnown: Boolean = false, val repeat: String = "off", val driving: Boolean = false,
+    val guestControls: Boolean = false, val sharing: Boolean = false, val guestAdditions: Boolean = false, val serverFeatures: Set<String> = emptySet(), val pendingGuestSong: String = "", val pendingGuestSongs: List<String> = emptyList(), val audioAvailable: Set<String> = emptySet(), val audioManifestKnown: Boolean = false, val repeat: String = "off", val driving: Boolean = false,
     val latencyMs: Long = 0, val message: String = "Import MP3s and create or join a session.", val busy: Boolean = false,
     val invitationCode: String = "", val invitationServer: String = "", val serviceReady: Boolean = false, val requestedPlaying: Boolean = false, val audioError: String = "",
-    val parkedConfirmed: Boolean = false, val audioOnlyVideo: Boolean = false, val automotive: Boolean = false, val vehicleKnown: Boolean = false, val vehicleRestricted: Boolean = false, val mediaProtocol: Int = 1
+    val parkedConfirmed: Boolean = false, val audioOnlyVideo: Boolean = false, val automotive: Boolean = false, val vehicleKnown: Boolean = false, val vehicleRestricted: Boolean = false, val mediaProtocol: Int = 1, val acousticProbeMs: Long? = null
 ) {
     val canControl get() = role == "host" || role == "local" || guestControls
+    val supportsVoice get() = "convoy_ptt_pcm16_v1" in serverFeatures
+    val supportsRadar get() = "convoy_location_v1" in serverFeatures
+    val supportsGuestMusic get() = "guest_music_upload_v1" in serverFeatures
     val track get() = queue.getOrNull(index)
     val showVideo get() = VideoSafetyPolicy.canShowPicture(parkedConfirmed, driving, audioOnlyVideo, automotive, vehicleKnown, vehicleRestricted)
 }
 
 class SyncCoordinator(private val context: Context, val dao: LibraryDao, preferencesName: String = "session") {
     private val prefs = context.getSharedPreferences(preferencesName, Context.MODE_PRIVATE)
+    private val initialEndpoint = ServerDefaults.resolve(
+        prefs.getString("endpoint", null),
+        prefs.getBoolean("manualServer", false),
+        !prefs.getString("code", "").isNullOrBlank()
+    )
     private val scope = CoroutineScope(SupervisorJob() + Dispatchers.Main.immediate)
     val http = OkHttpClient.Builder().connectTimeout(10, java.util.concurrent.TimeUnit.SECONDS).readTimeout(30, java.util.concurrent.TimeUnit.SECONDS).pingInterval(10, java.util.concurrent.TimeUnit.SECONDS).build()
-    private val mutable = MutableStateFlow(AppState(endpoint = prefs.getString("endpoint", "https://carsync-music.onrender.com")!!.ifBlank { "https://carsync-music.onrender.com" }, carName = prefs.getString("name", "My car")!!, code = prefs.getString("code", "")!!, role = prefs.getString("role", "")!!, latencyMs = prefs.getLong("latency", 0), driving = prefs.getBoolean("driving", false)))
+    private val mutable = MutableStateFlow(AppState(endpoint = initialEndpoint, carName = prefs.getString("name", "My car")!!, code = prefs.getString("code", "")!!, role = prefs.getString("role", "")!!, memberId = prefs.getString("memberId", "")!!, latencyMs = prefs.getLong("latency", 0), driving = prefs.getBoolean("driving", false)))
     val state: StateFlow<AppState> = mutable.asStateFlow()
     private var bearer = prefs.getString("token", "")!!
     private var ws: WebSocket? = null
+    private val convoyAudio = ConvoyAudio(context, { player },
+        { data -> ws?.send(JSONObject().put("type", "ptt_pcm").put("data", data).toString()) },
+        { reason -> scope.launch { message(reason); pttRelease() } }
+    )
+    private var recentMovingAtMs = -100000L
+    private val radar = ConvoyRadar(context) { loc ->
+        if (loc != null && loc.hasSpeed() && loc.speed > 5f / 3.6f && loc.accuracy < 30f) {
+            recentMovingAtMs = SystemClock.elapsedRealtime()
+            if (!state.value.driving) driving(true)
+        }
+        val packet = JSONObject().put("type", "location")
+        if (loc == null) packet.put("enabled", false)
+        else packet.put("lat", loc.latitude).put("lon", loc.longitude)
+            .put("speed", loc.speed.toDouble()).put("bearing", loc.bearing.toDouble())
+            .put("accuracy", loc.accuracy.toDouble())
+        ws?.send(packet.toString())
+    }
+    private val discovery = LanDiscovery(context) { endpoint ->
+        scope.launch { update { it.copy(discoveredServer = endpoint) } }
+    }
+    fun beginDiscovery() = discovery.start()
+    fun stopDiscovery() = discovery.stop()
+    fun toggleRadar(enabled: Boolean) {
+        if (enabled && !state.value.supportsRadar) { message("Convoy radar needs the updated session server."); return }
+        if (enabled && !state.value.connected) { message("Join a session before sharing your location."); return }
+        if (!enabled) {
+            radar.stop()
+            ConvoyForeground.stopLocation(context)
+            update { it.copy(radarEnabled = false) }
+            return
+        }
+        val started = ConvoyForeground.startLocation(context) && radar.start()
+        if (!started) {
+            ConvoyForeground.stopLocation(context)
+            message("Location cannot start. Allow location access while CarSync is open.")
+        }
+        update { it.copy(radarEnabled = started) }
+    }
+    fun pttRequest() {
+        if (!state.value.connected) { message("Join a session first to talk with another car."); return }
+        if (state.value.speakerId != null) { message("Intercom is busy. Release the current speaker first."); return }
+        if (!state.value.supportsVoice) { message("Intercom needs the newer convoy server. Update your Render deployment or use the matching local backend."); return }
+        if (!ConvoyForeground.startMicrophone(context)) {
+            message("Microphone service could not start. Open CarSync and try again.")
+            return
+        }
+        if (ws?.send(JSONObject().put("type", "ptt_request").toString()) != true) { ConvoyForeground.stopMicrophone(context); message("Intercom connection unavailable. Reconnect and retry.") } else message("Requesting talk channel…")
+    }
+    fun pttRelease() {
+        convoyAudio.stopCapture()
+        ConvoyForeground.stopMicrophone(context)
+        if (state.value.speakerId == state.value.memberId) {
+            convoyAudio.duck(false)
+            update { it.copy(speakerId = null) }
+        }
+        ws?.send(JSONObject().put("type", "ptt_release").toString())
+        message("Talk channel released.")
+    }
+    fun voteTrack(hash: String) {
+        if ("convoy_votes_v1" in state.value.serverFeatures && state.value.connected)
+            send(JSONObject().put("type", "vote_track").put("hash", hash))
+        else message("This server does not support guest song voting. Update the server.")
+    }
+    fun addGuestSong(hash: String) = addGuestSongs(listOf(hash))
+    fun addGuestSongs(hashes: List<String>) {
+        val state = state.value
+        if (!state.connected || state.driving) { message("Connect and park before contributing media."); return }
+        if (!state.supportsGuestMusic) { message("The server needs the latest guest media update."); return }
+        if (!state.sharing || !state.guestAdditions) { message("Ask host to enable media sharing and guest additions."); return }
+        if (state.pendingGuestSong.isNotBlank() || state.busy) { message("A batch is already uploading."); return }
+        val accepted = hashes.distinct().filter { hash ->
+            val t = state.library.find { it.hash == hash }
+            t != null && ((t.mediaType == "audio" && t.mimeType == "audio/mpeg") ||
+                    (t.mediaType == "video" && t.mimeType == "video/mp4" &&
+                     "guest_video_mp4_v1" in state.serverFeatures)) &&
+                    t.durationMs > 0 && t.sizeBytes in 1L..104857600L &&
+                    state.queue.none { it.hash == hash }
+        }.take(500)
+        if (accepted.isEmpty()) {
+            message("No new supported MP3 or MP4 files selected. Each must be at most 100 MB.")
+            return
+        }
+        update { it.copy(pendingGuestSongs = accepted) }
+        requestNextGuestUpload()
+    }
+    private fun requestNextGuestUpload() {
+        if (!state.value.connected || !state.value.sharing || !state.value.guestAdditions) {
+            update { it.copy(pendingGuestSong = "", pendingGuestSongs = emptyList(), busy = false) }
+            return
+        }
+        val next = state.value.pendingGuestSongs.firstOrNull()
+        if (next == null) {
+            update { it.copy(pendingGuestSong = "", busy = false) }
+            message("Selected media batch finished uploading.")
+            return
+        }
+        val t = state.value.library.find { it.hash == next }
+        if (t == null) {
+            update { it.copy(pendingGuestSongs = it.pendingGuestSongs.drop(1)) }
+            requestNextGuestUpload()
+            return
+        }
+        update { it.copy(pendingGuestSong = next, pendingGuestSongs = it.pendingGuestSongs.drop(1)) }
+        val data = JSONObject().put("hash", t.hash).put("title", t.title)
+            .put("artist", t.artist).put("album", t.album)
+            .put("durationMs", t.durationMs).put("mediaType", t.mediaType)
+            .put("mimeType", t.mimeType).put("sizeBytes", t.sizeBytes)
+            .put("width", t.width).put("height", t.height)
+        send(JSONObject().put("type", "guest_add").put("track", data))
+        message("Requesting upload: ${t.title}")
+    }
+    private fun uploadGuestSong(hash: String) {
+        val state = state.value
+        val track = state.library.find { it.hash == hash } ?: run { message("Media missing from device."); return }
+        scope.launch {
+            update { it.copy(busy = true) }
+            try {
+                withContext(Dispatchers.IO) {
+                    val uri = Uri.parse(track.uri)
+                    val size = context.contentResolver.openAssetFileDescriptor(uri, "r")?.use { it.length } ?: -1L
+                    require(size in 1L..104857600L) { "File size unavailable or exceeds 100 MB" }
+                    val body = object : RequestBody() {
+                        override fun contentType() = track.mimeType.toMediaType()
+                        override fun contentLength(): Long = size
+                        override fun writeTo(sink: okio.BufferedSink) {
+                            context.contentResolver.openInputStream(uri)?.use { input ->
+                                val buffer = ByteArray(65536)
+                                while (true) {
+                                    val n = input.read(buffer)
+                                    if (n < 0) break
+                                    sink.write(buffer, 0, n)
+                                }
+                            } ?: throw IOException("Media file is no longer readable")
+                        }
+                    }
+                    val route = if (track.mediaType == "video") "video" else "audio"
+                    val request = Request.Builder().url("${state.endpoint}/sessions/${state.code}/$route/$hash")
+                        .header("Authorization", "Bearer $bearer").put(body).build()
+                    http.newCall(request).execute().use { response ->
+                        if (!response.isSuccessful) error(JSONObject(response.body?.string() ?: "{}").optString("error", "Upload rejected by server"))
+                    }
+                }
+                message("Added ${track.title} to shared queue.")
+            } catch (e: Exception) { message("Media upload failed: ${e.message}") }
+            finally {
+                update { it.copy(busy = false, pendingGuestSong = "") }
+                requestNextGuestUpload()
+            }
+        }
+    }
+    fun measureAcoustics() {
+        if (state.value.driving || state.value.playing || state.value.requestedPlaying ||
+            (state.value.automotive && (!state.value.vehicleKnown || state.value.vehicleRestricted || !state.value.parkedConfirmed))) {
+            message("Park and pause music before starting acoustic measurement."); return
+        }
+        scope.launch {
+            update { it.copy(busy = true, acousticProbeMs = null) }
+            try {
+                val result = AcousticProbe(context).measure()
+                update { it.copy(acousticProbeMs = result) }
+                message(if (result == null) "Measurement unavailable. Allow microphone permission and try a quieter cabin." else "Measured speaker-to-microphone loopback about ${result}ms. Diagnostic only; do not apply as the device offset.")
+            } finally { update { it.copy(busy = false) } }
+        }
+    }
     private var generation = 0
     private var attempts = 0
     private var reconnect: Job? = null
@@ -70,6 +246,12 @@ class SyncCoordinator(private val context: Context, val dao: LibraryDao, prefere
         if (uri.scheme == "carsync" && uri.host == "join") update { it.copy(invitationCode = uri.getQueryParameter("code") ?: "", invitationServer = uri.getQueryParameter("server") ?: "", message = "Review the invitation server address before joining.") }
     }
     init {
+        // Existing v1.6 phones migrate off the old default unless they are still in
+        // a session or have explicitly chosen a custom server.
+        if (prefs.getString("code", "").isNullOrBlank() &&
+            prefs.getString("endpoint", null) != initialEndpoint) {
+            prefs.edit().putString("endpoint", initialEndpoint).apply()
+        }
         update { it.copy(automotive = vehicleSafety.automotive, vehicleRestricted = vehicleSafety.automotive) }; vehicleSafety.start()
         scope.launch { dao.observeTracks().collect { list -> update { it.copy(library = list) }; if (state.value.missing) desired?.let { schedule(it, true) } } }
         scope.launch { dao.observePlaylists().collect { list -> update { it.copy(playlists = list) } } }
@@ -97,7 +279,7 @@ class SyncCoordinator(private val context: Context, val dao: LibraryDao, prefere
         else if (state.value.role == "local" && state.value.queue.isNotEmpty()) { if (prepare(PlaybackFrame(state.value.index, state.value.positionMs, false, 0.0, 0)) && state.value.requestedPlaying && !automotiveVideoBlocked()) p.play() }
         loops?.cancel(); loops = scope.launch { while (isActive) { tick(); delay(250) } }
     }
-    fun detach() { player = null; preparedHash = ""; activeRevision = -1; loops?.cancel(); scheduleJob?.cancel(); generation++; ws?.close(1000, "Service stopped"); ws = null; reconnect?.cancel(); update { it.copy(connected = false, playing = false, serviceReady = false) } }
+    fun detach() { convoyAudio.close(); radar.stop(); discovery.stop(); ConvoyForeground.stopLocation(context); ConvoyForeground.stopMicrophone(context); player = null; preparedHash = ""; activeRevision = -1; loops?.cancel(); scheduleJob?.cancel(); generation++; ws?.close(1000, "Service stopped"); ws = null; reconnect?.cancel(); update { it.copy(connected = false, playing = false, serviceReady = false) } }
     fun shutdown() { detach(); vehicleSafety.close(); scope.cancel() }
     fun configure(endpoint: String, name: String) {
         require(!state.value.connected && state.value.code.isBlank()) { "Leave the current session before changing the server" }
@@ -105,7 +287,7 @@ class SyncCoordinator(private val context: Context, val dao: LibraryDao, prefere
         val url = clean.toHttpUrlOrNull() ?: error("Enter a full http:// or https:// server address")
         require(url.encodedPath == "/" && url.query == null && url.username.isEmpty() && url.password.isEmpty()) { "Use the server root address without paths or credentials" }
         require(url.isHttps || isLanHost(url.host)) { "Public servers require HTTPS. HTTP is allowed only on a private network." }
-        prefs.edit().putString("endpoint", clean).putString("name", name.take(40)).apply(); update { it.copy(endpoint = clean, carName = name.take(40)) }
+        prefs.edit().putString("endpoint", clean).putBoolean("manualServer", true).putString("name", name.take(40)).apply(); update { it.copy(endpoint = clean, carName = name.take(40)) }
     }
     fun create() = establish(null)
     fun join(code: String) = establish(code)
@@ -120,8 +302,8 @@ class SyncCoordinator(private val context: Context, val dao: LibraryDao, prefere
                 val path = if (code == null) "/sessions" else "/sessions/$code/join"
                 val result = withContext(Dispatchers.IO) { request(path, "POST", JSONObject().put("name", state.value.carName)) }
                 bearer = result.getString("token")
-                prefs.edit().putString("token", bearer).putString("code", result.getString("code")).putString("role", result.getString("role")).apply()
-                update { it.copy(code = result.getString("code"), role = result.getString("role"), message = "Connecting session…") }; connect()
+                prefs.edit().putString("token", bearer).putString("code", result.getString("code")).putString("role", result.getString("role")).putString("memberId", result.getString("memberId")).apply()
+                update { it.copy(code = result.getString("code"), role = result.getString("role"), memberId = result.getString("memberId"), message = "Connecting session…") }; connect()
             } catch (e: Exception) { message(e.message ?: "Cannot reach server") }
             finally { update { it.copy(busy = false) } }
         }
@@ -144,17 +326,60 @@ class SyncCoordinator(private val context: Context, val dao: LibraryDao, prefere
         })
     }
     private fun lost() {
-        update { it.copy(connected = false, clockReady = false, message = "Connection lost. Local audio continues; reconnecting…") }
+        convoyAudio.close()
+        radar.stop()
+        ConvoyForeground.stopMicrophone(context)
+        ConvoyForeground.stopLocation(context)
+        update { it.copy(connected = false, radarEnabled = false, speakerId = null, clockReady = false, message = "Connection lost. Local audio continues; reconnecting…") }
         scheduleJob?.cancel()
         if (reconnect?.isActive == true) return
         val delayMs = (1000L shl attempts.coerceAtMost(5)) + (0..500).random(); attempts++
         reconnect = scope.launch { delay(delayMs); reconnect = null; connect() }
     }
     private fun frame(x: JSONObject) = PlaybackFrame(x.getInt("index"), x.getDouble("positionMs").toLong(), x.getBoolean("playing"), x.getDouble("executeAt"), x.getLong("revision"))
-    private fun cars(array: JSONArray): List<Car> = (0 until array.length()).map { i -> val c = array.getJSONObject(i); Car(c.getString("name"), c.getString("role"), c.getBoolean("online"), if (c.isNull("driftMs")) null else c.optDouble("driftMs").toLong(), if (c.isNull("rttMs")) null else c.optDouble("rttMs").toLong(), c.optBoolean("buffered"), c.optBoolean("missing")) }
+    private fun cars(array: JSONArray): List<Car> = (0 until array.length()).map { i ->
+        val c = array.getJSONObject(i)
+        val loc = c.optJSONObject("location")?.let {
+            ConvoyPosition(
+                it.optDouble("lat"), it.optDouble("lon"), it.optDouble("speed"),
+                it.optDouble("bearing"), it.optDouble("accuracy"),
+                System.currentTimeMillis()
+            )
+        }
+        Car(c.getString("name"), c.getString("role"), c.getBoolean("online"),
+            if (c.isNull("driftMs")) null else c.optDouble("driftMs").toLong(),
+            if (c.isNull("rttMs")) null else c.optDouble("rttMs").toLong(),
+            c.optBoolean("buffered"), c.optBoolean("missing"), c.optString("id"), loc)
+    }
     private fun receive(x: JSONObject) {
         when (x.getString("type")) {
             "cars" -> update { it.copy(cars = cars(x.getJSONArray("cars"))) }
+            "guest_upload_granted" -> {
+                val hash = x.optString("hash")
+                if (hash.isNotBlank() && state.value.pendingGuestSong == hash) uploadGuestSong(hash)
+            }
+            "ptt_start" -> {
+                update { it.copy(speakerId = if (x.isNull("speakerId")) null else x.optString("speakerId")) }
+                convoyAudio.duck(true)
+                message(if (x.optString("speakerId") == state.value.memberId) "Microphone granted. Talking to other cars." else "Listening to another car…")
+                // Capture only after the server explicitly grants the speaking floor.
+                if (x.optString("speakerId") == state.value.memberId && !convoyAudio.beginCapture()) {
+                    ConvoyForeground.stopMicrophone(context)
+                    ws?.send(JSONObject().put("type", "ptt_release").toString())
+                    message("Microphone unavailable. Grant microphone permission before speaking.")
+                }
+            }
+            "ptt_stop" -> {
+                if (state.value.speakerId == state.value.memberId) ConvoyForeground.stopMicrophone(context)
+                convoyAudio.close()
+                update { it.copy(speakerId = null) }
+                message("Intercom ready. Tap Start talking.")
+            }
+            "ptt_pcm" -> convoyAudio.receive(x.getString("data"))
+            "ptt_denied" -> {
+                ConvoyForeground.stopMicrophone(context)
+                message(x.optString("reason", "Intercom is busy"))
+            }
             "pong" -> {
                 val t0 = x.getDouble("clientTime")
                 if (!pings.remove(t0)) return
@@ -168,11 +393,17 @@ class SyncCoordinator(private val context: Context, val dao: LibraryDao, prefere
                 val array = x.getJSONArray("playlist")
                 val queue = (0 until array.length()).map { i -> val t = array.getJSONObject(i); RemoteTrack(t.getString("hash"), t.getString("title"), t.getString("artist"), t.optString("album"), t.getDouble("durationMs").toLong(), t.optString("mediaType", "audio"), t.optString("mimeType", "audio/mpeg"), t.optLong("sizeBytes"), t.optInt("width"), t.optInt("height")) }
                 val cars = cars(x.getJSONArray("cars"))
+                val advertised = x.optJSONArray("capabilities")?.let { values ->
+                    (0 until values.length()).map { i -> values.optString(i) }.toSet()
+                } ?: emptySet()
                 val wasConnected = state.value.connected
                 val sharingRevoked = state.value.sharing && !x.getBoolean("sharing")
                 val available = x.optJSONArray("audioAvailable")?.let { a -> (0 until a.length()).map { a.getString(it) }.toSet() } ?: emptySet()
                 val audioChanged = state.value.audioAvailable != available || state.value.sharing != x.getBoolean("sharing")
-                update { it.copy(connected = true, queue = queue, cars = cars, maxGuests = x.optInt("maxGuests", 1).coerceIn(1, 50), guestControls = x.getBoolean("guestControls"), sharing = x.getBoolean("sharing"), audioAvailable = available, audioManifestKnown = x.has("audioAvailable"), mediaProtocol = x.optInt("mediaProtocol", 1), repeat = x.getString("repeat"), message = if (!wasConnected) "Session connected. Matching clocks…" else it.message) }
+                update { it.copy(connected = true, queue = queue, cars = cars, maxGuests = x.optInt("maxGuests", 1).coerceIn(1, 50), guestControls = x.getBoolean("guestControls"), guestAdditions = x.optBoolean("guestAdditions", false), serverFeatures = advertised, speakerId = if (x.isNull("speakerId")) null else x.optString("speakerId").takeIf { name -> name.isNotBlank() && name != "null" }, votes = x.optJSONObject("votes")?.let { obj -> obj.keys().asSequence().associateWith { key -> obj.optInt(key) } } ?: emptyMap(), sharing = x.getBoolean("sharing"), audioAvailable = available, audioManifestKnown = x.has("audioAvailable"), mediaProtocol = x.optInt("mediaProtocol", 1), repeat = x.getString("repeat"), message = if (!wasConnected) "Session connected. Matching clocks…" else it.message) }
+                if (!wasConnected && "convoy_ptt_pcm16_v1" !in advertised) {
+                    message("Connected to an older server: intercom, GPS, voting and guest songs need the v1.7 backend.")
+                }
                 previous = x.optJSONObject("previous")?.let(::frame)
                 val f = frame(x.getJSONObject("frame"))
                 update { it.copy(requestedPlaying = f.playing) }
@@ -181,7 +412,14 @@ class SyncCoordinator(private val context: Context, val dao: LibraryDao, prefere
                 if (playPublishedHash != null && queue.firstOrNull()?.hash == playPublishedHash) { playPublishedHash = null; command("play") }
                 if (state.value.role == "host" && state.value.sharing && !state.value.busy && queue.any { it.mediaType == "audio" && it.hash !in available }) uploadMissingAudio()
             }
-            "error" -> message(x.getString("error"))
+            "error" -> {
+                val error = x.getString("error")
+                if (state.value.pendingGuestSong.isNotBlank() && !state.value.busy) {
+                    update { it.copy(pendingGuestSong = "") }
+                    message("File skipped: $error")
+                    requestNextGuestUpload()
+                } else message(error)
+            }
         }
     }
     private fun prepare(f: PlaybackFrame): Boolean {
@@ -189,9 +427,9 @@ class SyncCoordinator(private val context: Context, val dao: LibraryDao, prefere
         val remote = state.value.queue.getOrNull(f.index) ?: run { p.pause(); p.clearMediaItems(); preparedHash = ""; return false }
         if (preparedHash == remote.hash) { update { it.copy(index = f.index) }; return true }
         val local = state.value.library.find { it.hash == remote.hash && it.mediaType == remote.mediaType }
-        val relayReady = remote.mediaType == "audio" && state.value.sharing && (!state.value.audioManifestKnown || remote.hash in state.value.audioAvailable)
-        val uri = if (local != null) local.uri else if (relayReady) "${state.value.endpoint}/sessions/${state.value.code}/audio/${remote.hash}" else null
-        if (uri == null) { p.pause(); p.clearMediaItems(); preparedHash = ""; update { it.copy(index = f.index, missing = true, playing = false, audioError = "", message = if (remote.mediaType == "video") "Missing matching video: ${remote.title}. Import the exact same file on this device. Video is local-only; no cloud upload." else if (it.sharing) "Waiting for the host to upload ${remote.title}. Playback will start automatically." else "Connected, but this song is not on this device. Ask the host to tap Share music with guests, or import the identical MP3.") }; return false }
+        val relayReady = state.value.sharing && (!state.value.audioManifestKnown || remote.hash in state.value.audioAvailable) && (remote.mediaType == "audio" || (remote.mediaType == "video" && remote.mimeType == "video/mp4"))
+        val uri = if (local != null) local.uri else if (relayReady) "${state.value.endpoint}/sessions/${state.value.code}/${if (remote.mediaType == "video") "video" else "audio"}/${remote.hash}" else null
+        if (uri == null) { p.pause(); p.clearMediaItems(); preparedHash = ""; update { it.copy(index = f.index, missing = true, playing = false, audioError = "", message = if (remote.mediaType == "video") "Missing video: ${remote.title}. Request MP4 sharing or import the matching file." else if (it.sharing) "Waiting for the host to upload ${remote.title}. Playback will start automatically." else "Connected, but this song is not on this device. Ask the host to tap Share music with guests, or import the identical MP3.") }; return false }
         val metadata = MediaMetadata.Builder().setTitle(remote.title).setArtist(remote.artist).setAlbumTitle(remote.album).apply { local?.artPath?.let { setArtworkUri(Uri.fromFile(java.io.File(it))) } }.build()
         activeRevision = -1
         p.pause(); p.setMediaItem(MediaItem.Builder().setMediaId(remote.hash).setUri(uri).setMimeType(remote.mimeType).setMediaMetadata(metadata).build(), f.positionMs); p.prepare(); preparedHash = remote.hash
@@ -309,16 +547,21 @@ class SyncCoordinator(private val context: Context, val dao: LibraryDao, prefere
             finally { update { it.copy(busy = false) } }
         }
     }
-    fun settings(guestControls: Boolean = state.value.guestControls, sharing: Boolean = state.value.sharing, repeat: String = state.value.repeat) {
+    fun settings(guestControls: Boolean = state.value.guestControls, sharing: Boolean = state.value.sharing, repeat: String = state.value.repeat, guestAdditions: Boolean = state.value.guestAdditions) {
         if (state.value.driving || !state.value.connected || state.value.role != "host") return
-        send(JSONObject().put("type", "settings").put("guestControls", guestControls).put("sharing", sharing).put("repeat", repeat))
+        send(JSONObject().put("type", "settings").put("guestControls", guestControls).put("sharing", sharing).put("repeat", repeat).put("guestAdditions", guestAdditions))
     }
     fun volume(v: Float) {
         val audio = context.getSystemService(Context.AUDIO_SERVICE) as android.media.AudioManager
         audio.setStreamVolume(android.media.AudioManager.STREAM_MUSIC, (v * audio.getStreamMaxVolume(android.media.AudioManager.STREAM_MUSIC)).toInt(), 0)
-        player?.volume = 1f; update { it.copy(volume = v) }
+        player?.volume = if (state.value.speakerId != null) 0.2f else 1f; update { it.copy(volume = v) }
     }
-    fun driving(v: Boolean) { prefs.edit().putBoolean("driving", v).apply(); update { it.copy(driving = v, parkedConfirmed = if (v) false else it.parkedConfirmed) }; refreshVideoOutput() }
+    fun driving(v: Boolean) {
+        if (!v && SystemClock.elapsedRealtime() - recentMovingAtMs < 15000L) {
+            message("GPS still reports movement. Stop and wait before leaving driving mode.")
+            return
+        }
+        prefs.edit().putBoolean("driving", v).apply(); update { it.copy(driving = v, parkedConfirmed = if (v) false else it.parkedConfirmed) }; refreshVideoOutput() }
     fun confirmParked() { if (!state.value.driving && !state.value.vehicleRestricted && (!state.value.automotive || state.value.vehicleKnown)) { update { it.copy(parkedConfirmed = true, audioOnlyVideo = false) }; refreshVideoOutput() } }
     fun revokeParked() { update { it.copy(parkedConfirmed = false) }; refreshVideoOutput() }
     fun audioOnlyVideo(value: Boolean) { update { it.copy(audioOnlyVideo = value) }; refreshVideoOutput(); if (value && player?.playerError != null) retryAudio() }
@@ -416,10 +659,14 @@ class SyncCoordinator(private val context: Context, val dao: LibraryDao, prefere
     }
     fun audioToken() = bearer
     fun resume() { if (bearer.isNotBlank() && !state.value.connected) connect() }
-    fun leave(clearMessage: Boolean = true) {
+    fun leave(clearMessage: Boolean = true) { convoyAudio.close(); radar.stop(); ConvoyForeground.stopLocation(context); ConvoyForeground.stopMicrophone(context);
         generation++; reconnect?.cancel(); ws?.close(1000, "Left session"); ws = null; scheduleJob?.cancel(); player?.pause(); player?.clearMediaItems(); preparedHash = ""; desired = null; activeRevision = -1; bearer = ""
-        prefs.edit().remove("token").remove("code").remove("role").apply()
-        update { it.copy(code = "", role = "", connected = false, queue = emptyList(), cars = emptyList(), clockReady = false, driftMs = null, requestedPlaying = false, audioError = "", message = if (clearMessage) "Session left. The host can create a new session for the group." else it.message) }
+        val nextEndpoint = ServerDefaults.resolve(
+            state.value.endpoint, prefs.getBoolean("manualServer", false), false
+        )
+        prefs.edit().remove("token").remove("code").remove("role").remove("memberId")
+            .putString("endpoint", nextEndpoint).apply()
+        update { it.copy(endpoint = nextEndpoint, code = "", role = "", memberId = "", radarEnabled = false, speakerId = null, serverFeatures = emptySet(), guestAdditions = false, pendingGuestSong = "", pendingGuestSongs = emptyList(), connected = false, queue = emptyList(), cars = emptyList(), clockReady = false, driftMs = null, requestedPlaying = false, audioError = "", message = if (clearMessage) "Session left. The host can create a new session for the group." else it.message) }
     }
     fun endSession() { scope.launch { try { withContext(Dispatchers.IO) { request("/sessions/${state.value.code}", "DELETE") }; leave() } catch (e: Exception) { message(e.message ?: "Could not end session") } } }
 }
