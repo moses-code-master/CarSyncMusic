@@ -95,6 +95,7 @@ private val pages = listOf("Home", "Music Library", "Playlists", "Create Session
     var showVoiceDialog by remember { mutableStateOf(false) }
     var voiceParkedConfirmed by remember { mutableStateOf(false) }
     var allowSystemSpeechProvider by remember { mutableStateOf(false) }
+    var voiceLanguage by remember { mutableStateOf(VoiceLanguage.ENGLISH_US) }
     var voiceStatus by remember { mutableStateOf("Tap Listen to speak one English command.") }
     LaunchedEffect(s.driving, s.vehicleRestricted) {
         if (s.driving || s.vehicleRestricted) {
@@ -158,7 +159,7 @@ private val pages = listOf("Home", "Music Library", "Playlists", "Create Session
         if (granted) sync.measureAcoustics() else sync.message("Microphone permission denied.")
     }
     val voiceRequest = rememberLauncherForActivityResult(ActivityResultContracts.RequestPermission()) { granted ->
-        if (granted) speechController.start(allowSystemSpeechProvider)
+        if (granted) speechController.start(allowSystemSpeechProvider, voiceLanguage)
         else voiceStatus = "Microphone permission denied."
     }
     val listenVoice = {
@@ -169,7 +170,7 @@ private val pages = listOf("Home", "Music Library", "Playlists", "Create Session
             voiceStatus = "Stop intercom or calibration first, then try a command."
         } else if (ContextCompat.checkSelfPermission(context, Manifest.permission.RECORD_AUDIO) ==
             android.content.pm.PackageManager.PERMISSION_GRANTED) {
-            speechController.start(allowSystemSpeechProvider)
+            speechController.start(allowSystemSpeechProvider, voiceLanguage)
         } else voiceRequest.launch(Manifest.permission.RECORD_AUDIO)
     }
     val locationRequest = rememberLauncherForActivityResult(ActivityResultContracts.RequestMultiplePermissions()) { result ->
@@ -198,14 +199,26 @@ private val pages = listOf("Home", "Music Library", "Playlists", "Create Session
                         Checkbox(checked = voiceParkedConfirmed, onCheckedChange = { voiceParkedConfirmed = it })
                         Text("I am parked, not operating the car.")
                     }
-                    if (!speechController.onDeviceAvailable()) {
-                        Row(verticalAlignment = Alignment.CenterVertically) {
-                            Checkbox(checked = allowSystemSpeechProvider,
-                                onCheckedChange = { allowSystemSpeechProvider = it })
-                            Text("Allow Android's system speech provider (may send audio over the internet).",
-                                fontSize = 12.sp)
-                        }
-                    } else Text("On-device speech recognition available.", color = Accent, fontSize = 12.sp)
+                    Text(if (speechController.onDeviceAvailable())
+                            "On-device speech engine detected. English may require an installed language pack."
+                        else "On-device speech engine unavailable. A system speech provider may work.",
+                        color = Muted, fontSize = 12.sp)
+                    OutlinedButton(onClick = {
+                        speechController.close()
+                        voiceLanguage = voiceLanguage.next()
+                        voiceStatus = "Language changed to ${voiceLanguage.label}. Tap Listen once to retry."
+                    }, enabled = !speechController.listening) {
+                        Text("Language: ${voiceLanguage.label} · Change")
+                    }
+                    Row(verticalAlignment = Alignment.CenterVertically) {
+                        Checkbox(checked = allowSystemSpeechProvider, onCheckedChange = {
+                            speechController.close()
+                            allowSystemSpeechProvider = it
+                            voiceStatus = if (it) "System speech provider selected. It may process audio online. Tap Listen once." else "On-device recognition selected."
+                        }, enabled = !speechController.listening)
+                        Text("Use Android system speech provider instead (may send voice online).",
+                            fontSize = 12.sp)
+                    }
                     Text("Try: “pause music”, “next track”, “show map”, “show cars”, “talk to convoy”, or “calibrate audio”.",
                         color = Muted, fontSize = 12.sp)
                     Text(voiceStatus, color = Accent, fontSize = 13.sp)
