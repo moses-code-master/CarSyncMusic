@@ -37,7 +37,9 @@ test('one host shares an uploaded track and identical controls with three indepe
     const hostState=await a.wait(x=>x.type==='state'&&x.frame.revision===i+2);
     for(const c of listeners) assert.deepEqual((await c.wait(x=>x.type==='state'&&x.frame.revision===i+2)).frame,hostState.frame);
   }
-  // Guests have no control until explicitly granted by the host.
+  // Playback controls are shared by default, but the host can restrict them.
+  a.send('settings',{sharing:false,guestControls:false}); await a.wait(x=>x.type==='state'&&!x.guestControls);
+  for(const c of listeners) await c.wait(x=>x.type==='state'&&!x.guestControls);
   listeners[0].send('control',{action:{kind:'pause'}}); assert.match((await listeners[0].wait(x=>x.type==='error')).error,/Host/);
   a.send('settings',{sharing:true,guestControls:true}); await a.wait(x=>x.type==='state'&&x.sharing&&x.guestControls);
   for(const c of listeners) await c.wait(x=>x.type==='state'&&x.sharing&&x.guestControls);
