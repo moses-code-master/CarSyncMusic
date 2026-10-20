@@ -1,4 +1,5 @@
 import http from 'node:http';
+import { encodeMulaw, decodeMulaw } from './voice-codec.mjs';
 import { WebSocketServer, WebSocket } from 'ws';
 import { DatabaseSync } from 'node:sqlite';
 import { mkdirSync, existsSync, statSync, createReadStream, createWriteStream, unlinkSync, renameSync, readdirSync } from 'node:fs';
@@ -21,7 +22,7 @@ export function createServer({ dataDir = process.env.DATA_DIR || './data', port 
   const metric = (s, m, event, status = {}) => { if (!closing) db.prepare('INSERT INTO telemetry VALUES(?,?,?,?,?,?,?,?)').run(s.code, m.id, now(), event, status.driftMs ?? null, status.rttMs ?? null, status.buffered ? 1 : 0, status.missing ? 1 : 0); };
   const sessions = new Map(), peers = new Map(), rates = new Map();
   const guestReservations = new Map(); // Session-scoped upload grants expire after 5 minutes.
-  const capabilities = ['convoy_ptt_pcm16_v1', 'convoy_location_v1', 'convoy_votes_v1', 'guest_music_upload_v1', 'guest_media_batch_v1', 'guest_video_mp4_v1'];
+  const capabilities = ['convoy_ptt_mulaw_v1', 'convoy_ptt_pcm16_v1', 'convoy_location_v1', 'convoy_votes_v1', 'guest_music_upload_v1', 'guest_media_batch_v1', 'guest_video_mp4_v1'];
   // Ephemeral voice floor and position data never enter the session database.
   const floors = new Map(), frameRates = new Map();
   const announce = (session, payload, exceptId = null) => {
@@ -205,7 +206,7 @@ export function createServer({ dataDir = process.env.DATA_DIR || './data', port 
           const s = sessions.get(b.code), member = s?.members.find(m => m.tokenHash === digest(b.token));
           if (!member || s.expiresAt < now()) { ws.close(4003, 'Invalid or expired session'); return; }
           context = { s, member }; clearTimeout(deadline);
-          peers.get(member.id)?.ws.close(4002, 'Another connection resumed this car'); releaseFloor(s, member.id); peers.set(member.id, { ws, video: Array.isArray(b.mediaCapabilities) && b.mediaCapabilities.includes('video') }); metric(s, member, 'online'); broadcast(s); return;
+          peers.get(member.id)?.ws.close(4002, 'Another connection resumed this car'); releaseFloor(s, member.id); peers.set(member.id, { ws, video: Array.isArray(b.mediaCapabilities) && b.mediaCapabilities.includes('video'), compactVoice: Array.isArray(b.voiceCodecs) && b.voiceCodecs.includes('mulaw16') }); metric(s, member, 'online'); broadcast(s); return;
         }
         const { s, member } = context;
         if (s.expiresAt < now() || !sessions.has(s.code)) { ws.close(4001, 'Session expired'); return; }
@@ -225,16 +226,36 @@ export function createServer({ dataDir = process.env.DATA_DIR || './data', port 
           return;
         }
         if (b.type === 'ptt_release') { releaseFloor(s, member.id); return; }
-        if (b.type === 'ptt_pcm') {
+        if (b.type === 'ptt_pcm' || b.type === 'ptt_mulaw') {
           const floor = floors.get(s.code);
           if (!floor || floor.memberId !== member.id) return;
+          // Do not allow a client to send compressed audio unless it negotiated it.
+          if (b.type === 'ptt_mulaw' && !peers.get(member.id)?.compactVoice) return;
           const rateKey = member.id + ':ptt_frames';
           if (limited(rateKey, 65, 1000)) return;
-          if (typeof b.data !== 'string' || b.data.length > 2000 || !/^[A-Za-z0-9+/]+={0,2}$/.test(b.data)) return;
-          const bytes = Buffer.from(b.data, 'base64');
-          if (bytes.length !== 640) return; // 20 ms, PCM16 mono at 16 kHz
+          if (typeof b.data !== 'string' || b.data.length > 1000 || !/^[A-Za-z0-9+/]+={0,2}$/.test(b.data)) return;
+          const received = Buffer.from(b.data, 'base64');
+          if (received.length !== (b.type === 'ptt_mulaw' ? 320 : 640)) return;
           floor.until = now() + 8000;
-          announce(s, {type:'ptt_pcm',speakerId:member.id,data:b.data}, member.id);
+          // Convert each codec at most once, then fan out using receiver capability.
+          // Old CarSync clients receive standard PCM16 frames; new ones get half-size
+          // μ-law packets. This permits mixed-version convoys without audio corruption.
+          let compact = b.type === 'ptt_mulaw' ? received : null;
+          let pcm = b.type === 'ptt_pcm' ? received : null;
+          for (const recipient of s.members) {
+            if (recipient.id === member.id) continue;
+            const peer = peers.get(recipient.id);
+            if (!peer?.ws || peer.ws.readyState !== WebSocket.OPEN) continue;
+            // Avoid growing an unbounded voice backlog on poor mobile data.
+            if (peer.ws.bufferedAmount > 128 * 1024) continue;
+            if (peer.compactVoice) {
+              compact ||= encodeMulaw(pcm);
+              send(peer.ws, {type:'ptt_mulaw',speakerId:member.id,data:compact.toString('base64')});
+            } else {
+              pcm ||= decodeMulaw(compact);
+              send(peer.ws, {type:'ptt_pcm',speakerId:member.id,data:pcm.toString('base64')});
+            }
+          }
           return;
         }
         if (b.type === 'location') {
