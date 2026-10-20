@@ -10,7 +10,7 @@ import androidx.media3.exoplayer.ExoPlayer
 import kotlin.concurrent.thread
 
 /** 16 kHz mono PCM is deliberately bounded to 20-ms WebSocket frames. Prototype transport. */
-class ConvoyAudio(private val context: Context, private val player: () -> ExoPlayer?, private val send: (String) -> Unit) {
+class ConvoyAudio(private val context: Context, private val player: () -> ExoPlayer?, private val send: (String) -> Unit, private val failed: (String) -> Unit = {}) {
     @Volatile private var recording = false
     private var capture: AudioRecord? = null
     private var playback: AudioTrack? = null
@@ -33,28 +33,37 @@ class ConvoyAudio(private val context: Context, private val player: () -> ExoPla
         if (recording || ContextCompat.checkSelfPermission(context, Manifest.permission.RECORD_AUDIO) != PackageManager.PERMISSION_GRANTED) return false
         val min = AudioRecord.getMinBufferSize(rate, AudioFormat.CHANNEL_IN_MONO, AudioFormat.ENCODING_PCM_16BIT)
         if (min <= 0) return false
-        val mic = try { AudioRecord(MediaRecorder.AudioSource.VOICE_COMMUNICATION, rate, AudioFormat.CHANNEL_IN_MONO, AudioFormat.ENCODING_PCM_16BIT, maxOf(min, size * 4)) } catch (_: Exception) { return false }
-        if (mic.state != AudioRecord.STATE_INITIALIZED) { mic.release(); return false }
-        capture = mic
+        var mic: AudioRecord? = null
+        for (source in listOf(MediaRecorder.AudioSource.VOICE_COMMUNICATION, MediaRecorder.AudioSource.MIC)) {
+            mic = try { AudioRecord(source, rate, AudioFormat.CHANNEL_IN_MONO, AudioFormat.ENCODING_PCM_16BIT, maxOf(min, size * 4)) }
+                catch (_: Exception) { null }
+            if (mic?.state == AudioRecord.STATE_INITIALIZED) break
+            mic?.release()
+            mic = null
+        }
+        val microphone = mic ?: return false
+        capture = microphone
         recording = true
         thread(name = "CarSync-PTT-capture", isDaemon = true) {
             try {
-                mic.startRecording()
+                microphone.startRecording()
+                if (microphone.recordingState != AudioRecord.RECORDSTATE_RECORDING) error("Audio input failed to start")
                 val buffer = ByteArray(size)
                 while (recording) {
                     var done = 0
                     while (recording && done < size) {
-                        val n = mic.read(buffer, done, size - done)
+                        val n = microphone.read(buffer, done, size - done)
                         if (n <= 0) { recording = false; break }
                         done += n
                     }
                     if (done == size) send(Base64.encodeToString(buffer, Base64.NO_WRAP))
                 }
-            } catch (_: Exception) {
+            } catch (e: Exception) {
+                if (recording) failed("Microphone capture failed: ${e.message.orEmpty()}")
                 recording = false
             } finally {
-                runCatching { mic.stop() }; mic.release()
-                if (capture === mic) capture = null
+                runCatching { microphone.stop() }; microphone.release()
+                if (capture === microphone) capture = null
             }
         }
         return true
