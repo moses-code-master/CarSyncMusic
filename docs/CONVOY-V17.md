@@ -101,3 +101,14 @@ This branch is **Phase 1 development**, not a production release and not an impl
 7. Load-test the target convoy size; server currently defaults to one host plus ten guests. No claim of successful 20–50-car operation without load testing.
 
 Do not merge or deploy this branch until required GitHub checks and physical tests pass; maintain the live production server separately.
+
+
+## v1.8 beta 2 — reference convoy dashboard and opt-in live map
+
+The **Home** screen is now a working version of the supplied CarSync Convoy mockup: live session/role header, three statistic cards (online cars, farthest GPS separation, live PTT status), compact Now Playing progress, one large green Push to Talk / Stop Talking surface, and shortcuts for Live Map / Playlist / Cars. The dashboard shows actual current data, **never mock values**. If distance is unknown, it displays a dash until both this car and another online car voluntarily provide fresh, accurate GPS fixes. Distances are straight-line estimates, not road distances.
+
+**Live Map** is an interactive OpenStreetMap view showing only online convoy cars with valid recent GPS fixes. Each vehicle must independently opt in to sharing; the map has explicit Start/Stop sharing controls and a link to the existing detailed Cars view. Map tiles require an internet connection; the OpenStreetMap tile provider may see the map area requested and a network IP, so do not assume tile requests are location-private. The map uses public community tiles for low-volume beta tests; replace the tile source with a properly contracted/provider-approved production tile service before scaling. Do not bulk download tiles. Attribution is visible on the map page. The app blocks interactive map use while driving or vehicle restrictions apply.
+
+Intercom button labels now follow the real floor state: Start/Stop/Cancel/Listening. Host and guest operate on the same authenticated voice floor. Microphone permission must be granted before transmitting; receiving requires no push-to-talk action. A large on-screen button is not a substitute for hands-free controls; do not use it while driving.
+
+This version is based on the previous passing v1.8.0-beta.1 development branch. **New CI checks are required** before phone testing. Keep production unchanged and keep this branch in draft until emulator testing and physical two-device verification pass.
