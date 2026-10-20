@@ -29,7 +29,7 @@ data class AppState(
     val guestControls: Boolean = false, val sharing: Boolean = false, val guestAdditions: Boolean = false, val serverFeatures: Set<String> = emptySet(), val pendingGuestSong: String = "", val pendingGuestSongs: List<String> = emptyList(), val audioAvailable: Set<String> = emptySet(), val audioManifestKnown: Boolean = false, val repeat: String = "off", val driving: Boolean = false,
     val latencyMs: Long = 0, val message: String = "Import MP3s and create or join a session.", val busy: Boolean = false,
     val invitationCode: String = "", val invitationServer: String = "", val serviceReady: Boolean = false, val requestedPlaying: Boolean = false, val audioError: String = "",
-    val parkedConfirmed: Boolean = false, val audioOnlyVideo: Boolean = false, val automotive: Boolean = false, val vehicleKnown: Boolean = false, val vehicleRestricted: Boolean = false, val mediaProtocol: Int = 1, val radioStatus: String = "Waiting for a radio connection", val acousticProbeMs: Long? = null, val acousticVariationMs: Long? = null, val acousticProfileReliable: Boolean = false
+    val parkedConfirmed: Boolean = false, val audioOnlyVideo: Boolean = false, val automotive: Boolean = false, val vehicleKnown: Boolean = false, val vehicleRestricted: Boolean = false, val mediaProtocol: Int = 1, val preferBluetoothRadio: Boolean = false, val radioStatus: String = "Waiting for a radio connection", val acousticProbeMs: Long? = null, val acousticVariationMs: Long? = null, val acousticProfileReliable: Boolean = false
 ) {
     val canControl get() = role == "host" || role == "local" || guestControls
     val supportsVoice get() = "convoy_ptt_pcm16_v1" in serverFeatures
@@ -52,7 +52,8 @@ class SyncCoordinator(private val context: Context, val dao: LibraryDao, prefere
     private val mutable = MutableStateFlow(AppState(endpoint = initialEndpoint, carName = prefs.getString("name", "My car")!!, code = prefs.getString("code", "")!!, role = prefs.getString("role", "")!!, memberId = prefs.getString("memberId", "")!!, latencyMs = prefs.getLong("latency", 0), driving = prefs.getBoolean("driving", false),
         acousticProbeMs = prefs.getLong("acoustic_profile_ms", -1).takeIf { it >= 0 },
         acousticVariationMs = prefs.getLong("acoustic_profile_variation", -1).takeIf { it >= 0 },
-        acousticProfileReliable = prefs.getBoolean("acoustic_profile_reliable", false)))
+        acousticProfileReliable = prefs.getBoolean("acoustic_profile_reliable", false),
+        preferBluetoothRadio = prefs.getBoolean("bluetoothRadio", false)))
     val state: StateFlow<AppState> = mutable.asStateFlow()
     private var bearer = prefs.getString("token", "")!!
     private var ws: WebSocket? = null
@@ -64,6 +65,27 @@ class SyncCoordinator(private val context: Context, val dao: LibraryDao, prefere
         { reason -> scope.launch { message(reason); pttRelease() } },
         { detail -> scope.launch { update { it.copy(radioStatus = detail) } } }
     )
+    init { convoyAudio.configureBluetoothRadio(prefs.getBoolean("bluetoothRadio", false)) }
+
+    fun preferBluetoothRadio(enabled: Boolean) {
+        if (state.value.driving || state.value.vehicleRestricted) {
+            message("Park before changing Bluetooth call-audio preferences."); return
+        }
+        if (state.value.speakerId != null || state.value.talkPending) {
+            message("Stop the active intercom before changing audio routing."); return
+        }
+        if (enabled && android.os.Build.VERSION.SDK_INT >= 31 &&
+            androidx.core.content.ContextCompat.checkSelfPermission(context,
+                android.Manifest.permission.BLUETOOTH_CONNECT) != android.content.pm.PackageManager.PERMISSION_GRANTED) {
+            message("Allow Nearby devices permission for Bluetooth headset call audio."); return
+        }
+        prefs.edit().putBoolean("bluetoothRadio", enabled).apply()
+        update { it.copy(preferBluetoothRadio = enabled,
+            radioStatus = if (enabled) "Bluetooth headset call audio preferred (when available)." else
+                "Android default music and microphone routes preferred.") }
+        convoyAudio.configureBluetoothRadio(enabled)
+    }
+
     private var recentMovingAtMs = -100000L
     private val radar = ConvoyRadar(context) { loc ->
         if (loc != null && loc.hasSpeed() && loc.speed > 5f / 3.6f && loc.accuracy < 30f) {
@@ -154,6 +176,7 @@ class SyncCoordinator(private val context: Context, val dao: LibraryDao, prefere
     fun pttRelease() {
         clearTalkRequest()
         convoyAudio.stopCapture()
+        convoyAudio.endCallRoute()
         ConvoyForeground.stopMicrophone(context)
         if (state.value.speakerId == state.value.memberId) {
             convoyAudio.duck(false)
@@ -454,6 +477,7 @@ class SyncCoordinator(private val context: Context, val dao: LibraryDao, prefere
             "ptt_start" -> {
                 clearTalkRequest()
                 update { it.copy(speakerId = if (x.isNull("speakerId")) null else x.optString("speakerId")) }
+                convoyAudio.beginVoiceSession()
                 convoyAudio.duck(true)
                 message(if (x.optString("speakerId") == state.value.memberId) "Microphone granted. Talking to other cars." else "Listening to another car…")
                 // Capture only after the server explicitly grants the speaking floor.
