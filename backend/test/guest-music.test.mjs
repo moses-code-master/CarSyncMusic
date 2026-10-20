@@ -38,7 +38,7 @@ test('guest speaks and uploads an MP3 with permission, without controlling sessi
   const send=(c,type,extra={})=>c.ws.send(JSON.stringify({type,id:randomUUID(),...extra}));
   const state=await wait(g,x=>x.type==='state'&&x.cars.length===3);
   assert.ok(state.capabilities.includes('guest_music_upload_v1'));
-  assert.equal(state.guestControls,true);
+  assert.equal(state.guestControls,false);
   // Voice floor is independent of playback and host privileges.
   send(g,'ptt_request');
   assert.equal((await wait(h,x=>x.type==='ptt_start')).speakerId,guest.memberId);
