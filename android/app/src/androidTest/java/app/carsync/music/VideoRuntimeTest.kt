@@ -97,7 +97,7 @@ class VideoRuntimeTest {
         scenario.onActivity { activity -> surface = android.view.SurfaceView(activity); activity.addContentView(surface, android.view.ViewGroup.LayoutParams(32,32)) }
         main { guest = SyncCoordinator(context, db.dao(), "video-guest"); guest.configure("http://10.0.2.2:8080", "Video guest"); player = ExoPlayer.Builder(context).build(); player.setVideoSurfaceView(surface); guest.attach(player); guest.confirmParked(); guest.join(sync.state.value.code) }
         try {
-            await("Mismatched guest must be missing") { guest.state.value.missing }; assertFalse(guest.state.value.playing); assertTrue(guest.state.value.message.contains("exact same file"))
+            await("Mismatched guest must be missing") { guest.state.value.missing }; assertFalse(guest.state.value.playing); assertTrue("Guest recovery instructions missing: ${guest.state.value.message}", guest.state.value.message.contains("Missing video") && guest.state.value.message.contains("matching file"))
             runBlocking { db.dao().insert(mp4) }
             await("Matching video did not recover") { var frames = 0; main { frames = player.videoDecoderCounters?.renderedOutputBufferCount ?: 0 }; guest.state.value.playing && frames > 2 }
             await("Video drift > 300ms") { guest.state.value.driftMs?.let { kotlin.math.abs(it) < 300 } == true }

@@ -212,10 +212,14 @@ export function createServer({ dataDir = process.env.DATA_DIR || './data', port 
         if (b.type === 'ping') { const t1 = now(); send(ws, { type: 'pong', clientTime: b.clientTime, t1, t2: now() }); return; }
         // Voice frames are paced separately from playback mutations.
         if (b.type === 'ptt_request') {
-          if (limited(member.id + ':ptt_requests', 12)) throw Error('Too many PTT requests');
+          if (limited(member.id + ':ptt_requests', 12)) { send(ws, {type:'ptt_denied',reason:'Too many talk requests. Wait one minute and retry.'}); return; }
           const floor = floors.get(s.code);
           if (floor && floor.memberId !== member.id) { send(ws, {type:'ptt_denied',reason:'Channel busy'}); return; }
-          if (floor && floor.memberId === member.id) { floor.until = now()+8000; return; }
+          if (floor && floor.memberId === member.id) {
+            floor.until = now()+8000;
+            send(ws, {type:'ptt_start',speakerId:member.id,name:member.name});
+            return;
+          }
           floors.set(s.code, {memberId:member.id,until:now()+8000});
           announce(s, {type:'ptt_start',speakerId:member.id,name:member.name});
           return;
