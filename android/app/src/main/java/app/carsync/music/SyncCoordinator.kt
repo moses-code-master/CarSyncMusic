@@ -62,13 +62,32 @@ class SyncCoordinator(private val context: Context, val dao: LibraryDao, prefere
     fun stopDiscovery() = discovery.stop()
     fun toggleRadar(enabled: Boolean) {
         if (enabled && !state.value.connected) { message("Join a session before sharing your location."); return }
-        if (enabled && !radar.start()) message("Grant location permission to share convoy position.")
-        else if (!enabled) radar.stop()
-        update { it.copy(radarEnabled = enabled && (context.checkSelfPermission(android.Manifest.permission.ACCESS_COARSE_LOCATION) == android.content.pm.PackageManager.PERMISSION_GRANTED ||
-            context.checkSelfPermission(android.Manifest.permission.ACCESS_FINE_LOCATION) == android.content.pm.PackageManager.PERMISSION_GRANTED)) }
+        if (!enabled) {
+            radar.stop()
+            ConvoyForeground.stopLocation(context)
+            update { it.copy(radarEnabled = false) }
+            return
+        }
+        val started = ConvoyForeground.startLocation(context) && radar.start()
+        if (!started) {
+            ConvoyForeground.stopLocation(context)
+            message("Location cannot start. Allow location access while CarSync is open.")
+        }
+        update { it.copy(radarEnabled = started) }
     }
-    fun pttRequest() { if (state.value.connected) ws?.send(JSONObject().put("type", "ptt_request").toString()) }
-    fun pttRelease() { convoyAudio.stopCapture(); ws?.send(JSONObject().put("type", "ptt_release").toString()) }
+    fun pttRequest() {
+        if (!state.value.connected || state.value.driving) return
+        if (!ConvoyForeground.startMicrophone(context)) {
+            message("Microphone service could not start. Open CarSync and try again.")
+            return
+        }
+        ws?.send(JSONObject().put("type", "ptt_request").toString())
+    }
+    fun pttRelease() {
+        convoyAudio.stopCapture()
+        ConvoyForeground.stopMicrophone(context)
+        ws?.send(JSONObject().put("type", "ptt_release").toString())
+    }
     fun voteTrack(hash: String) { if (state.value.connected) send(JSONObject().put("type", "vote_track").put("hash", hash)) }
     private var generation = 0
     private var attempts = 0
@@ -127,7 +146,7 @@ class SyncCoordinator(private val context: Context, val dao: LibraryDao, prefere
         else if (state.value.role == "local" && state.value.queue.isNotEmpty()) { if (prepare(PlaybackFrame(state.value.index, state.value.positionMs, false, 0.0, 0)) && state.value.requestedPlaying && !automotiveVideoBlocked()) p.play() }
         loops?.cancel(); loops = scope.launch { while (isActive) { tick(); delay(250) } }
     }
-    fun detach() { convoyAudio.close(); radar.stop(); discovery.stop(); player = null; preparedHash = ""; activeRevision = -1; loops?.cancel(); scheduleJob?.cancel(); generation++; ws?.close(1000, "Service stopped"); ws = null; reconnect?.cancel(); update { it.copy(connected = false, playing = false, serviceReady = false) } }
+    fun detach() { convoyAudio.close(); radar.stop(); discovery.stop(); ConvoyForeground.stopLocation(context); ConvoyForeground.stopMicrophone(context); player = null; preparedHash = ""; activeRevision = -1; loops?.cancel(); scheduleJob?.cancel(); generation++; ws?.close(1000, "Service stopped"); ws = null; reconnect?.cancel(); update { it.copy(connected = false, playing = false, serviceReady = false) } }
     fun shutdown() { detach(); vehicleSafety.close(); scope.cancel() }
     fun configure(endpoint: String, name: String) {
         require(!state.value.connected && state.value.code.isBlank()) { "Leave the current session before changing the server" }
@@ -175,7 +194,10 @@ class SyncCoordinator(private val context: Context, val dao: LibraryDao, prefere
     }
     private fun lost() {
         convoyAudio.close()
-        update { it.copy(connected = false, clockReady = false, message = "Connection lost. Local audio continues; reconnecting…") }
+        radar.stop()
+        ConvoyForeground.stopMicrophone(context)
+        ConvoyForeground.stopLocation(context)
+        update { it.copy(connected = false, radarEnabled = false, speakerId = null, clockReady = false, message = "Connection lost. Local audio continues; reconnecting…") }
         scheduleJob?.cancel()
         if (reconnect?.isActive == true) return
         val delayMs = (1000L shl attempts.coerceAtMost(5)) + (0..500).random(); attempts++
@@ -204,13 +226,21 @@ class SyncCoordinator(private val context: Context, val dao: LibraryDao, prefere
                 convoyAudio.duck(true)
                 // Capture only after the server explicitly grants the speaking floor.
                 if (x.optString("speakerId") == state.value.memberId && !convoyAudio.beginCapture()) {
+                    ConvoyForeground.stopMicrophone(context)
                     ws?.send(JSONObject().put("type", "ptt_release").toString())
                     message("Microphone unavailable. Grant microphone permission before speaking.")
                 }
             }
-            "ptt_stop" -> { convoyAudio.close(); update { it.copy(speakerId = null) } }
+            "ptt_stop" -> {
+                if (state.value.speakerId == state.value.memberId) ConvoyForeground.stopMicrophone(context)
+                convoyAudio.close()
+                update { it.copy(speakerId = null) }
+            }
             "ptt_pcm" -> convoyAudio.receive(x.getString("data"))
-            "ptt_denied" -> message(x.optString("reason", "Intercom is busy"))
+            "ptt_denied" -> {
+                ConvoyForeground.stopMicrophone(context)
+                message(x.optString("reason", "Intercom is busy"))
+            }
             "pong" -> {
                 val t0 = x.getDouble("clientTime")
                 if (!pings.remove(t0)) return
@@ -472,7 +502,7 @@ class SyncCoordinator(private val context: Context, val dao: LibraryDao, prefere
     }
     fun audioToken() = bearer
     fun resume() { if (bearer.isNotBlank() && !state.value.connected) connect() }
-    fun leave(clearMessage: Boolean = true) { convoyAudio.close(); radar.stop();
+    fun leave(clearMessage: Boolean = true) { convoyAudio.close(); radar.stop(); ConvoyForeground.stopLocation(context); ConvoyForeground.stopMicrophone(context);
         generation++; reconnect?.cancel(); ws?.close(1000, "Left session"); ws = null; scheduleJob?.cancel(); player?.pause(); player?.clearMediaItems(); preparedHash = ""; desired = null; activeRevision = -1; bearer = ""
         prefs.edit().remove("token").remove("code").remove("role").remove("memberId").apply()
         update { it.copy(code = "", role = "", memberId = "", radarEnabled = false, speakerId = null, connected = false, queue = emptyList(), cars = emptyList(), clockReady = false, driftMs = null, requestedPlaying = false, audioError = "", message = if (clearMessage) "Session left. The host can create a new session for the group." else it.message) }
