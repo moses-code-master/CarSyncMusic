@@ -23,7 +23,7 @@ data class Car(
 )
 data class AppState(
     val endpoint: String = ServerDefaults.CONVOY_URL, val carName: String = "My car", val code: String = "", val role: String = "", val connected: Boolean = false,
-    val library: List<Track> = emptyList(), val playlists: List<SavedPlaylist> = emptyList(), val queue: List<RemoteTrack> = emptyList(), val cars: List<Car> = emptyList(), val maxGuests: Int = 10, val speakerId: String? = null, val memberId: String = "", val votes: Map<String, Int> = emptyMap(), val radarEnabled: Boolean = false, val discoveredServer: String = "",
+    val library: List<Track> = emptyList(), val playlists: List<SavedPlaylist> = emptyList(), val queue: List<RemoteTrack> = emptyList(), val cars: List<Car> = emptyList(), val maxGuests: Int = 10, val speakerId: String? = null, val memberId: String = "", val votes: Map<String, Int> = emptyMap(), val radarEnabled: Boolean = false, val discoveredServer: String = "", val localSearchActive: Boolean = false, val localSearchStatus: String = "", val reconnectAttempt: Int = 0,
     val index: Int = 0, val positionMs: Long = 0, val playing: Boolean = false, val buffering: Boolean = false, val missing: Boolean = false,
     val clockReady: Boolean = false, val driftMs: Long? = null, val rttMs: Long = 0, val volume: Float = 0.8f,
     val guestControls: Boolean = false, val sharing: Boolean = false, val guestAdditions: Boolean = false, val serverFeatures: Set<String> = emptySet(), val pendingGuestSong: String = "", val pendingGuestSongs: List<String> = emptyList(), val audioAvailable: Set<String> = emptySet(), val audioManifestKnown: Boolean = false, val repeat: String = "off", val driving: Boolean = false,
@@ -69,11 +69,32 @@ class SyncCoordinator(private val context: Context, val dao: LibraryDao, prefere
             .put("accuracy", loc.accuracy.toDouble())
         ws?.send(packet.toString())
     }
-    private val discovery = LanDiscovery(context) { endpoint ->
-        scope.launch { update { it.copy(discoveredServer = endpoint) } }
+    private val discovery = LanDiscovery(context,
+        { endpoint -> scope.launch {
+            update { it.copy(discoveredServer = endpoint, localSearchStatus = "Found a local Wi-Fi relay at $endpoint", localSearchActive = false) }
+            stopDiscovery()
+        } },
+        { status -> scope.launch { update { it.copy(localSearchStatus = status) } } }
+    )
+    private var discoveryTimeout: Job? = null
+    fun beginDiscovery() {
+        if (state.value.localSearchActive) return
+        update { it.copy(discoveredServer = "", localSearchActive = true, localSearchStatus = "Searching Wi-Fi for a CarSync relay for 10 seconds…") }
+        discovery.start()
+        discoveryTimeout?.cancel()
+        discoveryTimeout = scope.launch {
+            delay(10000)
+            if (state.value.localSearchActive) {
+                discovery.stop()
+                update { it.copy(localSearchActive = false,
+                    localSearchStatus = "No local relay found. This is normal for cloud convoys: use the automatic internet server. A laptop relay must run on the same Wi-Fi with mDNS enabled.") }
+            }
+        }
     }
-    fun beginDiscovery() = discovery.start()
-    fun stopDiscovery() = discovery.stop()
+    fun stopDiscovery() {
+        discoveryTimeout?.cancel(); discoveryTimeout = null
+        discovery.stop(); update { it.copy(localSearchActive = false) }
+    }
     fun toggleRadar(enabled: Boolean) {
         if (enabled && !state.value.supportsRadar) { message("Convoy radar needs the updated session server."); return }
         if (enabled && !state.value.connected) { message("Join a session before sharing your location."); return }
@@ -279,7 +300,7 @@ class SyncCoordinator(private val context: Context, val dao: LibraryDao, prefere
         else if (state.value.role == "local" && state.value.queue.isNotEmpty()) { if (prepare(PlaybackFrame(state.value.index, state.value.positionMs, false, 0.0, 0)) && state.value.requestedPlaying && !automotiveVideoBlocked()) p.play() }
         loops?.cancel(); loops = scope.launch { while (isActive) { tick(); delay(250) } }
     }
-    fun detach() { convoyAudio.close(); radar.stop(); discovery.stop(); ConvoyForeground.stopLocation(context); ConvoyForeground.stopMicrophone(context); player = null; preparedHash = ""; activeRevision = -1; loops?.cancel(); scheduleJob?.cancel(); generation++; ws?.close(1000, "Service stopped"); ws = null; reconnect?.cancel(); update { it.copy(connected = false, playing = false, serviceReady = false) } }
+    fun detach() { convoyAudio.close(); radar.stop(); discovery.stop(); ConvoyForeground.stopLocation(context); ConvoyForeground.stopMicrophone(context); player = null; preparedHash = ""; activeRevision = -1; discoveryTimeout?.cancel(); loops?.cancel(); scheduleJob?.cancel(); generation++; ws?.close(1000, "Service stopped"); ws = null; reconnect?.cancel(); update { it.copy(connected = false, playing = false, serviceReady = false) } }
     fun shutdown() { detach(); vehicleSafety.close(); scope.cancel() }
     fun configure(endpoint: String, name: String) {
         require(!state.value.connected && state.value.code.isBlank()) { "Leave the current session before changing the server" }
@@ -315,14 +336,22 @@ class SyncCoordinator(private val context: Context, val dao: LibraryDao, prefere
     private fun connect() {
         if (bearer.isBlank() || player == null) return
         reconnect?.cancel(); val gen = ++generation; clock.reset(); pings.clear(); activeRevision = -1
-        update { it.copy(connected = false, clockReady = false, message = "Connecting…") }
+        update { it.copy(connected = false, clockReady = false, reconnectAttempt = attempts, message = if (attempts > 0) "Reconnecting to convoy server (attempt ${attempts + 1})…" else "Connecting…") }
         ws?.close(1000, "Reconnect")
         val url = state.value.endpoint.replaceFirst("https://", "wss://").replaceFirst("http://", "ws://") + "/ws"
         ws = http.newWebSocket(Request.Builder().url(url).build(), object : WebSocketListener() {
             override fun onOpen(webSocket: WebSocket, response: Response) { webSocket.send(JSONObject().put("type", "auth").put("code", state.value.code).put("token", bearer).put("mediaCapabilities", JSONArray(listOf("audio", "video"))).toString()) }
             override fun onMessage(webSocket: WebSocket, text: String) { scope.launch { if (gen == generation) try { receive(JSONObject(text)) } catch (e: Exception) { message("Invalid server message: ${e.message}") } } }
             override fun onFailure(webSocket: WebSocket, t: Throwable, response: Response?) { scope.launch { if (gen == generation) lost() } }
-            override fun onClosing(webSocket: WebSocket, code: Int, reason: String) { webSocket.close(code, reason); scope.launch { if (gen == generation) { if (code in 4001..4003) { message(reason); leave(false) } else lost() } } }
+            override fun onClosing(webSocket: WebSocket, code: Int, reason: String) {
+                webSocket.close(code, reason)
+                scope.launch { if (gen == generation) {
+                    if (code in 4001..4003) { message(reason); leave(false) } else lost()
+                } }
+            }
+            override fun onClosed(webSocket: WebSocket, code: Int, reason: String) {
+                scope.launch { if (gen == generation && state.value.code.isNotBlank() && code !in 4001..4003) lost() }
+            }
         })
     }
     private fun lost() {
@@ -330,7 +359,7 @@ class SyncCoordinator(private val context: Context, val dao: LibraryDao, prefere
         radar.stop()
         ConvoyForeground.stopMicrophone(context)
         ConvoyForeground.stopLocation(context)
-        update { it.copy(connected = false, radarEnabled = false, speakerId = null, clockReady = false, message = "Connection lost. Local audio continues; reconnecting…") }
+        update { it.copy(connected = false, radarEnabled = false, speakerId = null, clockReady = false, reconnectAttempt = attempts + 1, message = "Internet connection lost. Local media may continue; reconnecting automatically…") }
         scheduleJob?.cancel()
         if (reconnect?.isActive == true) return
         val delayMs = (1000L shl attempts.coerceAtMost(5)) + (0..500).random(); attempts++
@@ -400,7 +429,7 @@ class SyncCoordinator(private val context: Context, val dao: LibraryDao, prefere
                 val sharingRevoked = state.value.sharing && !x.getBoolean("sharing")
                 val available = x.optJSONArray("audioAvailable")?.let { a -> (0 until a.length()).map { a.getString(it) }.toSet() } ?: emptySet()
                 val audioChanged = state.value.audioAvailable != available || state.value.sharing != x.getBoolean("sharing")
-                update { it.copy(connected = true, queue = queue, cars = cars, maxGuests = x.optInt("maxGuests", 1).coerceIn(1, 50), guestControls = x.getBoolean("guestControls"), guestAdditions = x.optBoolean("guestAdditions", false), serverFeatures = advertised, speakerId = if (x.isNull("speakerId")) null else x.optString("speakerId").takeIf { name -> name.isNotBlank() && name != "null" }, votes = x.optJSONObject("votes")?.let { obj -> obj.keys().asSequence().associateWith { key -> obj.optInt(key) } } ?: emptyMap(), sharing = x.getBoolean("sharing"), audioAvailable = available, audioManifestKnown = x.has("audioAvailable"), mediaProtocol = x.optInt("mediaProtocol", 1), repeat = x.getString("repeat"), message = if (!wasConnected) "Session connected. Matching clocks…" else it.message) }
+                update { it.copy(connected = true, reconnectAttempt = 0, queue = queue, cars = cars, maxGuests = x.optInt("maxGuests", 1).coerceIn(1, 50), guestControls = x.getBoolean("guestControls"), guestAdditions = x.optBoolean("guestAdditions", false), serverFeatures = advertised, speakerId = if (x.isNull("speakerId")) null else x.optString("speakerId").takeIf { name -> name.isNotBlank() && name != "null" }, votes = x.optJSONObject("votes")?.let { obj -> obj.keys().asSequence().associateWith { key -> obj.optInt(key) } } ?: emptyMap(), sharing = x.getBoolean("sharing"), audioAvailable = available, audioManifestKnown = x.has("audioAvailable"), mediaProtocol = x.optInt("mediaProtocol", 1), repeat = x.getString("repeat"), message = if (!wasConnected) "Session connected. Matching clocks…" else it.message) }
                 if (!wasConnected && "convoy_ptt_pcm16_v1" !in advertised) {
                     message("Connected to an older server: intercom, GPS, voting and guest songs need the v1.7 backend.")
                 }
