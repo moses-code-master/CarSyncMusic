@@ -269,13 +269,13 @@ private val pages = listOf("Home", "Music Library", "Playlists", "Create Session
                             Text("Convoy Intercom", fontSize = 22.sp, fontWeight = FontWeight.Bold)
                             Text(if (!s.supportsVoice) "Intercom unavailable: old server version" else if (s.speakerId != null) "Speaker active" else "Channel available", color = if (s.supportsVoice) Muted else Color(0xFFFFBF7A))
                             if (!s.supportsVoice) Text("Upgrade the session server to enable talking from either car. The old Render server only supports synchronized playback.", color = Muted)
-                            LargeButton("Start talking", s.supportsVoice && s.speakerId == null && !s.driving) {
+                            LargeButton("Start talking", s.supportsVoice && s.speakerId == null) {
                                 if (ContextCompat.checkSelfPermission(context, Manifest.permission.RECORD_AUDIO) ==
                                     android.content.pm.PackageManager.PERMISSION_GRANTED) sync.pttRequest()
                                 else microphoneRequest.launch(Manifest.permission.RECORD_AUDIO)
                             }
                             LargeButton("Stop talking", s.speakerId == s.memberId) { sync.pttRelease() }
-                            Text("Only use interactive intercom controls while parked or as a passenger.", color = Muted)
+                            Text("Use hands-free controls where permitted. Do not interact with the screen while driving.", color = Muted)
                             if (!s.driving) {
                                 Text("Vote for an upcoming song", fontSize = 18.sp)
                                 s.queue.drop(s.index + 1).forEach { track ->
