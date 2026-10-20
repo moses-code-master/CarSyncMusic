@@ -47,7 +47,12 @@ class SyncCoordinator(private val context: Context, val dao: LibraryDao, prefere
     private val convoyAudio = ConvoyAudio(context, { player }) { data ->
         ws?.send(JSONObject().put("type", "ptt_pcm").put("data", data).toString())
     }
+    private var recentMovingAtMs = -100000L
     private val radar = ConvoyRadar(context) { loc ->
+        if (loc != null && loc.hasSpeed() && loc.speed > 5f / 3.6f && loc.accuracy < 30f) {
+            recentMovingAtMs = SystemClock.elapsedRealtime()
+            if (!state.value.driving) driving(true)
+        }
         val packet = JSONObject().put("type", "location")
         if (loc == null) packet.put("enabled", false)
         else packet.put("lat", loc.latitude).put("lon", loc.longitude)
@@ -418,7 +423,12 @@ class SyncCoordinator(private val context: Context, val dao: LibraryDao, prefere
         audio.setStreamVolume(android.media.AudioManager.STREAM_MUSIC, (v * audio.getStreamMaxVolume(android.media.AudioManager.STREAM_MUSIC)).toInt(), 0)
         player?.volume = if (state.value.speakerId != null) 0.2f else 1f; update { it.copy(volume = v) }
     }
-    fun driving(v: Boolean) { prefs.edit().putBoolean("driving", v).apply(); update { it.copy(driving = v, parkedConfirmed = if (v) false else it.parkedConfirmed) }; refreshVideoOutput() }
+    fun driving(v: Boolean) {
+        if (!v && SystemClock.elapsedRealtime() - recentMovingAtMs < 15000L) {
+            message("GPS still reports movement. Stop and wait before leaving driving mode.")
+            return
+        }
+        prefs.edit().putBoolean("driving", v).apply(); update { it.copy(driving = v, parkedConfirmed = if (v) false else it.parkedConfirmed) }; refreshVideoOutput() }
     fun confirmParked() { if (!state.value.driving && !state.value.vehicleRestricted && (!state.value.automotive || state.value.vehicleKnown)) { update { it.copy(parkedConfirmed = true, audioOnlyVideo = false) }; refreshVideoOutput() } }
     fun revokeParked() { update { it.copy(parkedConfirmed = false) }; refreshVideoOutput() }
     fun audioOnlyVideo(value: Boolean) { update { it.copy(audioOnlyVideo = value) }; refreshVideoOutput(); if (value && player?.playerError != null) retryAudio() }
