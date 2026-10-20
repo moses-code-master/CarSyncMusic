@@ -49,7 +49,7 @@ test('guest can sequentially contribute multiple MP3 songs and MP4s, including r
     const put=await fetch(api,{method:'PUT',headers:{Authorization:'Bearer '+guest.token},body:obj.bytes});
     assert.equal(put.status,200);
     await wait(x=>x.type==='state'&&x.playlist.length===i+1);
-    const got=await fetch(api,{headers:{Authorization:'Bearer '+host.token},Range:'bytes=2-7'});
+    const got=await fetch(api,{headers:{Authorization:'Bearer '+host.token,Range:'bytes=2-7'}});
     assert.equal(got.status,206);
     assert.deepEqual(Buffer.from(await got.arrayBuffer()),obj.bytes.subarray(2,8));
     assert.equal(got.headers.get('content-type'),obj.mime);
