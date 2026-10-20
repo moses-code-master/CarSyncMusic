@@ -429,12 +429,15 @@ private val pages = listOf("Home", "Music Library", "Playlists", "Create Session
                                 }
                             }
                         }
+                        Title("Convoy connectivity", "Wi-Fi or mobile data connects cars through the internet, including when they are kilometers apart.")
+                        Text("INTERNET · REQUIRED FOR REMOTE CARS", color = Accent, fontSize = 12.sp, fontWeight = FontWeight.Bold)
+                        Text("Use either mobile data or Wi-Fi with internet access. Bluetooth does not connect distant cars or replace the CarSync server.", color = Muted, fontSize = 12.sp)
                         Title("Convoy radio", "Host and guests take turns speaking while music ducks smoothly. Android voice DSP is enabled when available.")
                         Text("Audio transport: ${if (s.supportsCompactRadio) "Compact G.711 μ-law (50% smaller raw voice frames)" else if (s.supportsVoice) "Compatible PCM16" else "Intercom unavailable until connected"}", color = Muted)
                         Text(s.radioStatus, color = Muted, fontSize = 12.sp)
                         if (!s.driving) SettingToggle(
-                            "Prefer Bluetooth call microphone", s.preferBluetoothRadio,
-                            "Optional for compatible paired car headsets. Bluetooth call mode may reduce music quality. Android defaults remain unchanged when OFF."
+                            "Bluetooth call microphone (optional)", s.preferBluetoothRadio,
+                            "OFF by default. Uses a compatible paired car microphone only during intercom. May reduce music quality. Never replaces Wi-Fi or mobile data."
                         ) { enabled ->
                             if (enabled && Build.VERSION.SDK_INT >= 31 &&
                                 ContextCompat.checkSelfPermission(context, Manifest.permission.BLUETOOTH_CONNECT) !=
