@@ -92,6 +92,47 @@ private val pages = listOf("Home", "Music Library", "Playlists", "Create Session
     var latency by remember(s.latencyMs) { mutableStateOf(s.latencyMs.toString()) }
     LaunchedEffect(s.invitationCode) { if (s.invitationCode.isNotBlank()) page = "Join Session" }
     val context = androidx.compose.ui.platform.LocalContext.current
+    var showVoiceDialog by remember { mutableStateOf(false) }
+    var voiceParkedConfirmed by remember { mutableStateOf(false) }
+    var allowSystemSpeechProvider by remember { mutableStateOf(false) }
+    var voiceStatus by remember { mutableStateOf("Tap Listen to speak one English command.") }
+    LaunchedEffect(s.driving, s.vehicleRestricted) {
+        if (s.driving || s.vehicleRestricted) {
+            voiceParkedConfirmed = false
+            showVoiceDialog = false
+        }
+    }
+    val speechController = remember(context) {
+        ConvoySpeechController(context, { status -> voiceStatus = status }, { phrase ->
+            val command = ConvoyVoiceCommands.parse(phrase)
+            val current = sync.state.value
+            val speaking = current.speakerId == current.memberId && current.memberId.isNotBlank()
+            val parked = voiceParkedConfirmed && !current.driving && !current.vehicleRestricted &&
+                (!current.automotive || (current.vehicleKnown && current.parkedConfirmed))
+            if (!ConvoyVoiceCommands.permitted(command, current.connected,
+                    current.canControl, speaking, current.speakerId == null, parked)) {
+                voiceStatus = "Command not allowed: $phrase. Check parking, session and guest permissions."
+            } else {
+                voiceStatus = "Recognized: $phrase"
+                when (command) {
+                    VoiceAction.PLAY -> sync.command("play")
+                    VoiceAction.PAUSE -> sync.command("pause")
+                    VoiceAction.NEXT -> sync.command("next")
+                    VoiceAction.PREVIOUS -> sync.command("previous")
+                    VoiceAction.START_TALK -> android.os.Handler(android.os.Looper.getMainLooper())
+                        .postDelayed({ sync.pttRequest() }, 350)
+                    VoiceAction.STOP_TALK -> sync.pttRelease()
+                    VoiceAction.SHOW_CARS -> { page = "Connected Cars"; showVoiceDialog = false }
+                    VoiceAction.SHOW_MAP -> { page = "Live Map"; showVoiceDialog = false }
+                    VoiceAction.SHOW_PLAYER -> { page = "Now Playing"; showVoiceDialog = false }
+                    VoiceAction.CALIBRATE -> android.os.Handler(android.os.Looper.getMainLooper())
+                        .postDelayed({ sync.measureAcoustics() }, 350)
+                    VoiceAction.UNKNOWN -> {}
+                }
+            }
+        })
+    }
+    DisposableEffect(speechController) { onDispose { speechController.close() } }
     val import = rememberLauncherForActivityResult(ActivityResultContracts.OpenMultipleDocuments()) { sync.importFiles(it) }
     val legacyImport = rememberLauncherForActivityResult(ActivityResultContracts.StartActivityForResult()) { result ->
         if (result.resultCode == android.app.Activity.RESULT_OK) {
@@ -116,6 +157,21 @@ private val pages = listOf("Home", "Music Library", "Playlists", "Create Session
     val acousticRequest = rememberLauncherForActivityResult(ActivityResultContracts.RequestPermission()) { granted ->
         if (granted) sync.measureAcoustics() else sync.message("Microphone permission denied.")
     }
+    val voiceRequest = rememberLauncherForActivityResult(ActivityResultContracts.RequestPermission()) { granted ->
+        if (granted) speechController.start(allowSystemSpeechProvider)
+        else voiceStatus = "Microphone permission denied."
+    }
+    val listenVoice = {
+        if (!voiceParkedConfirmed || s.driving || s.vehicleRestricted ||
+            (s.automotive && (!s.vehicleKnown || !s.parkedConfirmed))) {
+            voiceStatus = "Confirm you are parked before listening for a voice command."
+        } else if (s.speakerId == s.memberId && s.memberId.isNotBlank() || s.talkPending || s.busy) {
+            voiceStatus = "Stop intercom or calibration first, then try a command."
+        } else if (ContextCompat.checkSelfPermission(context, Manifest.permission.RECORD_AUDIO) ==
+            android.content.pm.PackageManager.PERMISSION_GRANTED) {
+            speechController.start(allowSystemSpeechProvider)
+        } else voiceRequest.launch(Manifest.permission.RECORD_AUDIO)
+    }
     val locationRequest = rememberLauncherForActivityResult(ActivityResultContracts.RequestMultiplePermissions()) { result ->
         if (result.values.any { it }) sync.toggleRadar(true) else sync.message("Location permission denied.")
     }
@@ -132,6 +188,40 @@ private val pages = listOf("Home", "Music Library", "Playlists", "Create Session
     }
     val colors = darkColorScheme(primary = Accent, onPrimary = Color(0xFF162609), background = Color(0xFF0B1016), surface = Panel, onSurface = Color(0xFFF2F5FA), secondary = Color(0xFF92BFFF))
     MaterialTheme(colorScheme = colors) {
+        if (showVoiceDialog) AlertDialog(
+            onDismissRequest = { speechController.close(); showVoiceDialog = false },
+            title = { Text("CarSync Voice Commands") },
+            text = {
+                Column(verticalArrangement = Arrangement.spacedBy(8.dp)) {
+                    Text("One command per tap. Voice detection does not stay on in the background.")
+                    Row(verticalAlignment = Alignment.CenterVertically) {
+                        Checkbox(checked = voiceParkedConfirmed, onCheckedChange = { voiceParkedConfirmed = it })
+                        Text("I am parked, not operating the car.")
+                    }
+                    if (!speechController.onDeviceAvailable()) {
+                        Row(verticalAlignment = Alignment.CenterVertically) {
+                            Checkbox(checked = allowSystemSpeechProvider,
+                                onCheckedChange = { allowSystemSpeechProvider = it })
+                            Text("Allow Android's system speech provider (may send audio over the internet).",
+                                fontSize = 12.sp)
+                        }
+                    } else Text("On-device speech recognition available.", color = Accent, fontSize = 12.sp)
+                    Text("Try: “pause music”, “next track”, “show map”, “show cars”, “talk to convoy”, or “calibrate audio”.",
+                        color = Muted, fontSize = 12.sp)
+                    Text(voiceStatus, color = Accent, fontSize = 13.sp)
+                    if (s.speakerId == s.memberId && s.memberId.isNotBlank())
+                        Text("Use Stop Talking to end an active transmission before speaking another command.",
+                            color = Muted, fontSize = 12.sp)
+                }
+            },
+            confirmButton = { TextButton(onClick = { listenVoice() },
+                enabled = !speechController.listening && voiceParkedConfirmed &&
+                    !s.driving && !s.vehicleRestricted) { Text("Listen once") } },
+            dismissButton = { TextButton(onClick = {
+                speechController.close()
+                showVoiceDialog = false
+            }) { Text("Close") } }
+        )
         Scaffold(topBar = {
             if (page != "Home") Column(Modifier.background(Color(0xFF0C1017)).statusBarsPadding().padding(horizontal = 20.dp, vertical = 10.dp)) {
                 Row(verticalAlignment = Alignment.CenterVertically) {
@@ -170,7 +260,8 @@ private val pages = listOf("Home", "Music Library", "Playlists", "Create Session
                             onMap = { page = "Live Map" },
                             onPlaylist = { page = if (s.connected) "Now Playing" else "Music Library" },
                             onCars = { page = "Connected Cars" },
-                            onPlayer = { page = "Now Playing" }
+                            onPlayer = { page = "Now Playing" },
+                            onVoice = { showVoiceDialog = true }
                         )
                     }
                     "Music Library" -> {
@@ -329,13 +420,18 @@ private val pages = listOf("Home", "Music Library", "Playlists", "Create Session
                             LargeButton("Save server & car name", s.code.isBlank()) { try { sync.configure(endpoint, carName) } catch (e: Exception) { sync.message(e.message ?: "Invalid server") } }
                             OutlinedTextField(latency, { latency = it.filter(Char::isDigit).take(4) }, label = { Text("Local output latency compensation · 0–2000 ms") }, modifier = Modifier.fillMaxWidth())
                             LargeButton("Save calibration") { sync.latency(latency.toLongOrNull() ?: 0) }
-                            LargeButton("Measure speaker-to-mic delay (parked)", !s.busy && !s.driving && !s.playing) {
+                            LargeButton("Automatic acoustic check · 3 tones (parked)", !s.busy && !s.driving && !s.playing && s.speakerId == null && !s.talkPending) {
                                 if (ContextCompat.checkSelfPermission(context, Manifest.permission.RECORD_AUDIO) ==
                                     android.content.pm.PackageManager.PERMISSION_GRANTED) sync.measureAcoustics()
                                 else acousticRequest.launch(Manifest.permission.RECORD_AUDIO)
                             }
-                            if (s.acousticProbeMs != null) Text("Diagnostic loopback: ${s.acousticProbeMs} ms. This includes microphone delay; not an automatic synchronization adjustment.", color = Muted)
-                            Text("A device with more output delay starts earlier. Compare recordings from both speakers and adjust this value while parked.", color = Muted)
+                            if (s.acousticProbeMs != null) Text(
+                                "Automatic acoustic profile: ${s.acousticProbeMs} ms total speaker-to-microphone time · variation ${s.acousticVariationMs ?: 0} ms · ${if (s.acousticProfileReliable) "stable" else "unreliable"}.",
+                                color = if (s.acousticProfileReliable) Accent else Muted)
+                            Text("Three automatic tones estimate this phone's speaker-plus-microphone path. This is NOT yet cross-car automatic sync: microphone delays differ. The manual latency value stays unchanged.", color = Muted)
+                            LargeButton("Voice commands · parked only", !s.driving && !s.vehicleRestricted) { showVoiceDialog = true }
+                            Text("Offline speech recognition is preferred; other devices need separate consent for the Android speech provider, which may use the internet.", color = Muted, fontSize = 12.sp)
+                            Text("For cross-car alignment, compare recordings from two car speakers while parked and adjust local output latency compensation.", color = Muted)
                             if (s.role == "host") {
                                 SettingToggle("Guest playback controls", s.guestControls, "Allow guests to play, pause, skip and seek. Intercom is separate and always available when the backend supports it.") { sync.settings(guestControls = it) }
                                 if (s.supportsGuestMusic) SettingToggle("Allow guest music & MP4 contributions", s.guestAdditions, "Guests can contribute selected MP3s and MP4 videos, up to server storage and queue limits. Requires media sharing.") { sync.settings(guestAdditions = it) }
