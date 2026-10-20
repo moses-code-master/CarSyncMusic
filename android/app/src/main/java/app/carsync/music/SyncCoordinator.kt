@@ -52,9 +52,10 @@ class SyncCoordinator(private val context: Context, val dao: LibraryDao, prefere
     val state: StateFlow<AppState> = mutable.asStateFlow()
     private var bearer = prefs.getString("token", "")!!
     private var ws: WebSocket? = null
-    private val convoyAudio = ConvoyAudio(context, { player }) { data ->
-        ws?.send(JSONObject().put("type", "ptt_pcm").put("data", data).toString())
-    }
+    private val convoyAudio = ConvoyAudio(context, { player },
+        { data -> ws?.send(JSONObject().put("type", "ptt_pcm").put("data", data).toString()) },
+        { reason -> scope.launch { message(reason); pttRelease() } }
+    )
     private var recentMovingAtMs = -100000L
     private val radar = ConvoyRadar(context) { loc ->
         if (loc != null && loc.hasSpeed() && loc.speed > 5f / 3.6f && loc.accuracy < 30f) {
@@ -102,8 +103,12 @@ class SyncCoordinator(private val context: Context, val dao: LibraryDao, prefere
     fun pttRelease() {
         convoyAudio.stopCapture()
         ConvoyForeground.stopMicrophone(context)
+        if (state.value.speakerId == state.value.memberId) {
+            convoyAudio.duck(false)
+            update { it.copy(speakerId = null) }
+        }
         ws?.send(JSONObject().put("type", "ptt_release").toString())
-        message("Releasing talk channel…")
+        message("Talk channel released.")
     }
     fun voteTrack(hash: String) {
         if ("convoy_votes_v1" in state.value.serverFeatures && state.value.connected)
