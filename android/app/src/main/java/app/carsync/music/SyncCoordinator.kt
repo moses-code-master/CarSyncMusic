@@ -29,7 +29,7 @@ data class AppState(
     val guestControls: Boolean = false, val sharing: Boolean = false, val audioAvailable: Set<String> = emptySet(), val audioManifestKnown: Boolean = false, val repeat: String = "off", val driving: Boolean = false,
     val latencyMs: Long = 0, val message: String = "Import MP3s and create or join a session.", val busy: Boolean = false,
     val invitationCode: String = "", val invitationServer: String = "", val serviceReady: Boolean = false, val requestedPlaying: Boolean = false, val audioError: String = "",
-    val parkedConfirmed: Boolean = false, val audioOnlyVideo: Boolean = false, val automotive: Boolean = false, val vehicleKnown: Boolean = false, val vehicleRestricted: Boolean = false, val mediaProtocol: Int = 1
+    val parkedConfirmed: Boolean = false, val audioOnlyVideo: Boolean = false, val automotive: Boolean = false, val vehicleKnown: Boolean = false, val vehicleRestricted: Boolean = false, val mediaProtocol: Int = 1, val acousticProbeMs: Long? = null
 ) {
     val canControl get() = role == "host" || role == "local" || guestControls
     val track get() = queue.getOrNull(index)
@@ -89,6 +89,20 @@ class SyncCoordinator(private val context: Context, val dao: LibraryDao, prefere
         ws?.send(JSONObject().put("type", "ptt_release").toString())
     }
     fun voteTrack(hash: String) { if (state.value.connected) send(JSONObject().put("type", "vote_track").put("hash", hash)) }
+    fun measureAcoustics() {
+        if (state.value.driving || state.value.playing || state.value.requestedPlaying ||
+            (state.value.automotive && (!state.value.vehicleKnown || state.value.vehicleRestricted || !state.value.parkedConfirmed))) {
+            message("Park and pause music before starting acoustic measurement."); return
+        }
+        scope.launch {
+            update { it.copy(busy = true, acousticProbeMs = null) }
+            try {
+                val result = AcousticProbe(context).measure()
+                update { it.copy(acousticProbeMs = result) }
+                message(if (result == null) "Measurement unavailable. Allow microphone permission and try a quieter cabin." else "Measured speaker-to-microphone loopback about ${result}ms. Diagnostic only; do not apply as the device offset.")
+            } finally { update { it.copy(busy = false) } }
+        }
+    }
     private var generation = 0
     private var attempts = 0
     private var reconnect: Job? = null
