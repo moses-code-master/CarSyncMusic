@@ -201,10 +201,12 @@ private val pages = listOf("Home", "Music Library", "Playlists", "Create Session
                         LargeButton("Listen locally", selected.isNotEmpty()) { sync.listenLocal(selected); page = "Now Playing" }
                         LargeButton("Publish to session", selected.isNotEmpty() && s.role == "host") { sync.publish(selected); page = "Now Playing" }
                         if (s.role == "guest" && s.connected) {
-                            Text("Guest music: select one local MP3 to add it to the shared queue.", color = Muted)
-                            LargeButton("Add MP3 to shared queue", selected.size == 1 && s.supportsGuestMusic && s.guestAdditions && s.sharing && !s.busy && !s.driving) {
-                                sync.addGuestSong(selected.first())
+                            Text("Guest music: select multiple MP3s and add them to the session queue in one batch.", color = Muted)
+                            LargeButton("Add ${selected.size} selected MP3s", selected.isNotEmpty() && s.supportsGuestMusic && s.guestAdditions && s.sharing && !s.busy && !s.driving && s.pendingGuestSong.isBlank()) {
+                                sync.addGuestSongs(selected)
+                                selected = emptyList()
                             }
+                            if (s.pendingGuestSong.isNotBlank()) Text("Uploading batch · ${s.pendingGuestSongs.size} waiting", color = Accent)
                             if (!s.supportsGuestMusic) Text("The session server needs the guest music upgrade.", color = Color(0xFFFFBF7A))
                             else if (!s.sharing || !s.guestAdditions) Text("Ask the host to enable music sharing and guest song additions in Settings.", color = Muted)
                         }
@@ -336,7 +338,7 @@ private val pages = listOf("Home", "Music Library", "Playlists", "Create Session
                             Text("A device with more output delay starts earlier. Compare recordings from both speakers and adjust this value while parked.", color = Muted)
                             if (s.role == "host") {
                                 SettingToggle("Guest playback controls", s.guestControls, "Allow guests to play, pause, skip and seek. Intercom is separate and always available when the backend supports it.") { sync.settings(guestControls = it) }
-                                if (s.supportsGuestMusic) SettingToggle("Allow guests to add MP3 songs", s.guestAdditions, "Guests can upload their own authorized MP3s to the end of your session queue. Requires audio sharing enabled.") { sync.settings(guestAdditions = it) }
+                                if (s.supportsGuestMusic) SettingToggle("Allow guest music & MP4 contributions", s.guestAdditions, "Guests can contribute selected MP3s and MP4 videos, up to server storage and queue limits. Requires media sharing.") { sync.settings(guestAdditions = it) }
                                 SettingToggle("I have permission to share this audio", s.sharing, "Opt in only for audio you may lawfully share. Each MP3 uploads once to your server, then every guest can stream it. Revoking stops guest relay playback.") { sync.settings(sharing = it) }
                                 LargeButton("Upload current playlist to relay", s.sharing && !s.busy) { sync.uploadMissingAudio() }
                                 LargeButton("Export synchronization telemetry") { launchPickerSafely({ metricsExport.launch("carsync-${s.code}-metrics.csv") }) { sync.message("This device has no working file picker for saving reports.") } }
