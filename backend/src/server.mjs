@@ -192,6 +192,7 @@ export function createServer({ dataDir = process.env.DATA_DIR || './data', port 
           if (limited(member.id + ':ptt_requests', 12)) throw Error('Too many PTT requests');
           const floor = floors.get(s.code);
           if (floor && floor.memberId !== member.id) { send(ws, {type:'ptt_denied',reason:'Channel busy'}); return; }
+          if (floor && floor.memberId === member.id) { floor.until = now()+8000; return; }
           floors.set(s.code, {memberId:member.id,until:now()+8000});
           announce(s, {type:'ptt_start',speakerId:member.id,name:member.name});
           return;
@@ -210,9 +211,15 @@ export function createServer({ dataDir = process.env.DATA_DIR || './data', port 
           return;
         }
         if (b.type === 'location') {
-          if (limited(member.id + ':locations', 30, 60000)) return;
           const p = peers.get(member.id);
-          if (p?.ws === ws) p.location = b.enabled === false ? null : validPosition(b);
+          // Revocation bypasses the rate limiter to remove coordinates immediately.
+          if (b.enabled === false) {
+            if (p?.ws === ws) p.location = null;
+            broadcastCars(s);
+            return;
+          }
+          if (limited(member.id + ':locations', 45, 60000)) return;
+          if (p?.ws === ws) p.location = validPosition(b);
           broadcastCars(s);
           return;
         }
