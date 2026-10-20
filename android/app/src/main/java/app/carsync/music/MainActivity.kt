@@ -110,12 +110,6 @@ private val pages = listOf("Home", "Music Library", "Playlists", "Create Session
         val permission = if (Build.VERSION.SDK_INT >= 33) Manifest.permission.READ_MEDIA_AUDIO else Manifest.permission.READ_EXTERNAL_STORAGE
         if (ContextCompat.checkSelfPermission(context, permission) == android.content.pm.PackageManager.PERMISSION_GRANTED) sync.scanPhone() else scanPermission.launch(permission)
     }
-    val microphoneRequest = rememberLauncherForActivityResult(ActivityResultContracts.RequestPermission()) { granted ->
-        if (granted) sync.pttRequest() else sync.message("Microphone permission denied.")
-    }
-    val locationRequest = rememberLauncherForActivityResult(ActivityResultContracts.RequestMultiplePermissions()) { result ->
-        if (result.values.any { it }) sync.toggleRadar(true) else sync.message("Location permission denied.")
-    }
     val metricsExport = rememberLauncherForActivityResult(ActivityResultContracts.CreateDocument("text/csv")) { uri -> if (uri != null) sync.exportMetrics(uri) }
     val qrImport = rememberLauncherForActivityResult(ActivityResultContracts.OpenDocument()) { uri ->
         if (uri != null) try {
@@ -249,24 +243,7 @@ private val pages = listOf("Home", "Music Library", "Playlists", "Create Session
                         if (endpoint != s.endpoint && endpoint.isNotBlank()) { Text("QR suggests server: $endpoint", color = Accent); LargeButton("Review in Settings") { page = "Settings" } }
                     }
                     "Videos" -> VideoLibraryScreen(s, sync) { page = "Now Playing" }
-                    "Now Playing" -> {
-                        NowPlaying(s, sync)
-                        if (s.connected) {
-                            Text("Convoy Intercom", fontSize = 22.sp, fontWeight = FontWeight.Bold)
-                            Text(if (s.speakerId != null) "Speaker active" else "Channel available", color = Muted)
-                            LargeButton("Start talking", s.speakerId == null) {
-                                if (ContextCompat.checkSelfPermission(context, Manifest.permission.RECORD_AUDIO) ==
-                                    android.content.pm.PackageManager.PERMISSION_GRANTED) sync.pttRequest()
-                                else microphoneRequest.launch(Manifest.permission.RECORD_AUDIO)
-                            }
-                            LargeButton("Stop talking") { sync.pttRelease() }
-                            Text("Only use interactive intercom controls while parked or as a passenger.", color = Muted)
-                            Text("Vote for an upcoming song", fontSize = 18.sp)
-                            s.queue.drop(s.index + 1).forEach { track ->
-                                LargeButton("${track.title} · ${s.votes[track.hash] ?: 0} votes") { sync.voteTrack(track.hash) }
-                            }
-                        }
-                    }
+                    "Now Playing" -> NowPlaying(s, sync)
                     "Connected Cars" -> {
                         Title("Travelling together", "Drift is measured against the server timeline; it does not measure speaker or Bluetooth delay.")
                         if (s.connected) Text("${s.cars.count { it.role == "guest" && it.online }} guests online · ${s.cars.count { it.role == "guest" }}/${s.maxGuests} guest places used", color = Accent, fontSize = 20.sp)
@@ -278,29 +255,9 @@ private val pages = listOf("Home", "Music Library", "Playlists", "Create Session
                             else Text(if (car.buffered) "Audio ready" else "Preparing / buffering", color = Muted)
                         } } }
                         if (s.cars.isEmpty()) Text("Create or join a session to see the host and all guests.")
-                        LargeButton(if (s.radarEnabled) "Stop location sharing" else "Share live convoy location") {
-                            if (s.radarEnabled) sync.toggleRadar(false)
-                            else if (ContextCompat.checkSelfPermission(context, Manifest.permission.ACCESS_FINE_LOCATION) ==
-                                android.content.pm.PackageManager.PERMISSION_GRANTED ||
-                                ContextCompat.checkSelfPermission(context, Manifest.permission.ACCESS_COARSE_LOCATION) ==
-                                android.content.pm.PackageManager.PERMISSION_GRANTED) sync.toggleRadar(true)
-                            else locationRequest.launch(arrayOf(Manifest.permission.ACCESS_FINE_LOCATION, Manifest.permission.ACCESS_COARSE_LOCATION))
-                        }
-                        Text("Location is opt-in and only transmitted during a session.", color = Muted)
                     }
                     "Settings" -> {
                         if (!s.driving) LargeButton("About CarSync Music") { page = "About" }
-                        if (!s.driving) {
-                            LargeButton("Find nearby CarSync server") { sync.beginDiscovery() }
-                            if (s.discoveredServer.isNotBlank()) {
-                                Text("Nearby server: ${s.discoveredServer}", color = Accent)
-                                LargeButton("Use discovered server", s.code.isBlank()) {
-                                    endpoint = s.discoveredServer
-                                    try { sync.configure(endpoint, carName) } catch (e: Exception) { sync.message(e.message ?: "Invalid server") }
-                                    sync.stopDiscovery()
-                                }
-                            }
-                        }
                         Title("Setup & playback", "Use HTTPS for mobile data. Use a private Wi-Fi server address on a shared hotspot.")
                         SettingToggle("Driving mode", s.driving, "Hides library, session setup and complex controls. Park before disabling; automatic vehicle-speed detection is unavailable.") { sync.driving(it); if (it) page = "Now Playing" }
                         if (!s.driving) {
