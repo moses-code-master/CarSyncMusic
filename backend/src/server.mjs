@@ -8,6 +8,7 @@ import { Transform } from 'node:stream';
 import { createHash } from 'node:crypto';
 import { pathToFileURL } from 'node:url';
 import { token, digest, code, now, effective, position, schedule, validatePlaylist } from './model.mjs';
+import { advertiseLanRelay } from './mdns.mjs';
 
 export function createServer({ dataDir = process.env.DATA_DIR || './data', port = Number(process.env.PORT || 8080), maxGuests = Number(process.env.MAX_GUESTS || 10) } = {}) {
   if (!Number.isInteger(maxGuests) || maxGuests < 1 || maxGuests > 50) throw Error('MAX_GUESTS must be an integer from 1 to 50');
@@ -16,6 +17,7 @@ export function createServer({ dataDir = process.env.DATA_DIR || './data', port 
   db.exec('PRAGMA journal_mode=WAL; CREATE TABLE IF NOT EXISTS sessions(code TEXT PRIMARY KEY, body TEXT NOT NULL)');
   db.exec('CREATE TABLE IF NOT EXISTS telemetry(code TEXT, member TEXT, at REAL, event TEXT, drift REAL, rtt REAL, buffered INTEGER, missing INTEGER); CREATE INDEX IF NOT EXISTS telemetry_session ON telemetry(code,at)');
   let closing = false;
+  let lanAdvertiser = null;
   const metric = (s, m, event, status = {}) => { if (!closing) db.prepare('INSERT INTO telemetry VALUES(?,?,?,?,?,?,?,?)').run(s.code, m.id, now(), event, status.driftMs ?? null, status.rttMs ?? null, status.buffered ? 1 : 0, status.missing ? 1 : 0); };
   const sessions = new Map(), peers = new Map(), rates = new Map();
   // Ephemeral voice floor and position data never enter the session database.
@@ -277,7 +279,11 @@ export function createServer({ dataDir = process.env.DATA_DIR || './data', port 
   }, 1000).unref();
   const heartbeat = setInterval(() => { for (const ws of wss.clients) { if (ws.alive === false) ws.terminate(); else { ws.alive = false; ws.ping(); } } }, 15000).unref();
   wss.on('connection', ws => { ws.alive = true; ws.on('pong', () => { ws.alive = true; }); });
-  return { server, sessions, listen: () => new Promise(resolve => server.listen(port, '0.0.0.0', resolve)), close: async () => { closing = true; clearInterval(cleanup); clearInterval(advance); clearInterval(heartbeat); clearInterval(floorExpiry); for (const ws of wss.clients) ws.terminate(); await new Promise(r => wss.close(r)); await new Promise(r => server.close(r)); db.close(); } };
+  return { server, sessions, listen: () => new Promise(resolve => server.listen(port, '0.0.0.0', () => {
+    // Explicitly opt in only on a trusted LAN; cloud deployments never advertise.
+    if (process.env.CARSYNC_LAN_DISCOVERY === '1') lanAdvertiser = advertiseLanRelay({port:server.address().port});
+    resolve();
+  })), close: async () => { closing = true; lanAdvertiser?.close(); clearInterval(cleanup); clearInterval(advance); clearInterval(heartbeat); clearInterval(floorExpiry); for (const ws of wss.clients) ws.terminate(); await new Promise(r => wss.close(r)); await new Promise(r => server.close(r)); db.close(); } };
 }
 if (process.argv[1] && import.meta.url === pathToFileURL(process.argv[1]).href) {
   const app = createServer(); await app.listen(); console.log(`CarSync server listening on ${app.server.address().port}`);
