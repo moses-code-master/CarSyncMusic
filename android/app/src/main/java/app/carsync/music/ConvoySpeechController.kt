@@ -10,7 +10,6 @@ import android.speech.RecognitionListener
 import android.speech.RecognizerIntent
 import android.speech.SpeechRecognizer
 import androidx.core.content.ContextCompat
-import java.util.Locale
 
 /**
  * User-activated, single-shot speech recognition. No background wake word.
@@ -28,20 +27,22 @@ class ConvoySpeechController(
     fun onDeviceAvailable(): Boolean = Build.VERSION.SDK_INT >= 31 &&
         SpeechRecognizer.isOnDeviceRecognitionAvailable(context)
 
-    fun start(allowProviderNetwork: Boolean): Boolean {
+    fun start(useSystemProvider: Boolean, language: VoiceLanguage = VoiceLanguage.ENGLISH_US): Boolean {
         if (listening) return false
         if (ContextCompat.checkSelfPermission(context, Manifest.permission.RECORD_AUDIO)
             != PackageManager.PERMISSION_GRANTED) {
             status("Allow microphone permission to use voice commands.")
             return false
         }
-        val useOffline = onDeviceAvailable()
-        if (!useOffline && !allowProviderNetwork) {
-            status("On-device voice recognition is unavailable. Turn on the optional system speech provider in Settings if you agree to its privacy policy.")
+        // The presence of an on-device recognizer does NOT guarantee that
+        // the English language pack is installed; Android error 12 proves this.
+        val useOffline = !useSystemProvider
+        if (useOffline && !onDeviceAvailable()) {
+            status("On-device recognition unavailable. You may opt into Android's system speech provider (which may send audio online).")
             return false
         }
-        if (!useOffline && !SpeechRecognizer.isRecognitionAvailable(context)) {
-            status("This Android head unit has no installed speech-recognition service.")
+        if (useSystemProvider && !SpeechRecognizer.isRecognitionAvailable(context)) {
+            status("No Android system speech recognizer is installed. Install or enable one in Android Settings.")
             return false
         }
         return try {
@@ -57,17 +58,7 @@ class ConvoySpeechController(
                 override fun onEndOfSpeech() { status("Recognizing command…") }
                 override fun onError(error: Int) {
                     close()
-                    status(when (error) {
-                        SpeechRecognizer.ERROR_NO_MATCH, SpeechRecognizer.ERROR_SPEECH_TIMEOUT ->
-                            "No clear command recognized. Try again."
-                        SpeechRecognizer.ERROR_RECOGNIZER_BUSY ->
-                            "Microphone is busy. Stop the intercom and retry."
-                        SpeechRecognizer.ERROR_INSUFFICIENT_PERMISSIONS ->
-                            "Microphone permission is required."
-                        SpeechRecognizer.ERROR_NETWORK, SpeechRecognizer.ERROR_NETWORK_TIMEOUT ->
-                            "Speech recognition network unavailable."
-                        else -> "Speech recognition failed (code $error)."
-                    })
+                    status(VoiceRecognitionHelp.describe(error, useOffline, language))
                 }
                 override fun onResults(results: Bundle?) {
                     val words = results?.getStringArrayList(SpeechRecognizer.RESULTS_RECOGNITION)
@@ -81,14 +72,14 @@ class ConvoySpeechController(
             })
             val intent = Intent(RecognizerIntent.ACTION_RECOGNIZE_SPEECH).apply {
                 putExtra(RecognizerIntent.EXTRA_LANGUAGE_MODEL, RecognizerIntent.LANGUAGE_MODEL_FREE_FORM)
-                putExtra(RecognizerIntent.EXTRA_LANGUAGE, Locale.ENGLISH.toLanguageTag())
+                language.tag?.let { putExtra(RecognizerIntent.EXTRA_LANGUAGE, it) }
                 putExtra(RecognizerIntent.EXTRA_MAX_RESULTS, 1)
                 putExtra(RecognizerIntent.EXTRA_PREFER_OFFLINE, useOffline)
             }
             listening = true
             recognizer?.startListening(intent)
-            status(if (useOffline) "Offline speech recognition active…" else
-                "System speech provider active. It may process audio over the internet.")
+            status(if (useOffline) "Trying on-device ${language.label} speech recognition…" else
+                "Android system speech provider: ${language.label}. Audio may be processed online.")
             true
         } catch (e: Exception) {
             close()
