@@ -390,13 +390,19 @@ class SyncCoordinator(private val context: Context, val dao: LibraryDao, prefere
         reconnect = scope.launch { delay(delayMs); reconnect = null; connect() }
     }
     private fun frame(x: JSONObject) = PlaybackFrame(x.getInt("index"), x.getDouble("positionMs").toLong(), x.getBoolean("playing"), x.getDouble("executeAt"), x.getLong("revision"))
-    private fun cars(array: JSONArray): List<Car> = (0 until array.length()).map { i ->
+    private fun cars(array: JSONArray, serverNowMs: Double? = null): List<Car> = (0 until array.length()).map { i ->
         val c = array.getJSONObject(i)
         val loc = c.optJSONObject("location")?.let {
+            // Server and Android clocks can differ. Age is calculated using the
+            // server's own fix timestamp and serverNow, then mapped to local time.
+            val ageMs = if (serverNowMs != null && serverNowMs.isFinite()) {
+                (serverNowMs - it.optDouble("at", serverNowMs))
+                    .toLong().coerceIn(0L, 30000L)
+            } else 0L
             ConvoyPosition(
                 it.optDouble("lat"), it.optDouble("lon"), it.optDouble("speed"),
                 it.optDouble("bearing"), it.optDouble("accuracy"),
-                System.currentTimeMillis()
+                System.currentTimeMillis() - ageMs
             )
         }
         Car(c.getString("name"), c.getString("role"), c.getBoolean("online"),
@@ -406,7 +412,7 @@ class SyncCoordinator(private val context: Context, val dao: LibraryDao, prefere
     }
     private fun receive(x: JSONObject) {
         when (x.getString("type")) {
-            "cars" -> update { it.copy(cars = cars(x.getJSONArray("cars"))) }
+            "cars" -> update { it.copy(cars = cars(x.getJSONArray("cars"), x.optDouble("serverNow", Double.NaN).takeIf(Double::isFinite))) }
             "guest_upload_granted" -> {
                 val hash = x.optString("hash")
                 if (hash.isNotBlank() && state.value.pendingGuestSong == hash) uploadGuestSong(hash)
@@ -448,7 +454,7 @@ class SyncCoordinator(private val context: Context, val dao: LibraryDao, prefere
                 attempts = 0
                 val array = x.getJSONArray("playlist")
                 val queue = (0 until array.length()).map { i -> val t = array.getJSONObject(i); RemoteTrack(t.getString("hash"), t.getString("title"), t.getString("artist"), t.optString("album"), t.getDouble("durationMs").toLong(), t.optString("mediaType", "audio"), t.optString("mimeType", "audio/mpeg"), t.optLong("sizeBytes"), t.optInt("width"), t.optInt("height")) }
-                val cars = cars(x.getJSONArray("cars"))
+                val cars = cars(x.getJSONArray("cars"), x.optDouble("serverNow", Double.NaN).takeIf(Double::isFinite))
                 val advertised = x.optJSONArray("capabilities")?.let { values ->
                     (0 until values.length()).map { i -> values.optString(i) }.toSet()
                 } ?: emptySet()
