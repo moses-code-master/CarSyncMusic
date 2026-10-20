@@ -23,7 +23,7 @@ data class Car(
 )
 data class AppState(
     val endpoint: String = ServerDefaults.CONVOY_URL, val carName: String = "My car", val code: String = "", val role: String = "", val connected: Boolean = false,
-    val library: List<Track> = emptyList(), val playlists: List<SavedPlaylist> = emptyList(), val queue: List<RemoteTrack> = emptyList(), val cars: List<Car> = emptyList(), val maxGuests: Int = 10, val speakerId: String? = null, val memberId: String = "", val votes: Map<String, Int> = emptyMap(), val radarEnabled: Boolean = false, val discoveredServer: String = "", val localSearchActive: Boolean = false, val localSearchStatus: String = "", val reconnectAttempt: Int = 0,
+    val library: List<Track> = emptyList(), val playlists: List<SavedPlaylist> = emptyList(), val queue: List<RemoteTrack> = emptyList(), val cars: List<Car> = emptyList(), val maxGuests: Int = 10, val speakerId: String? = null, val memberId: String = "", val votes: Map<String, Int> = emptyMap(), val radarEnabled: Boolean = false, val discoveredServer: String = "", val localSearchActive: Boolean = false, val localSearchStatus: String = "", val reconnectAttempt: Int = 0, val talkPending: Boolean = false,
     val index: Int = 0, val positionMs: Long = 0, val playing: Boolean = false, val buffering: Boolean = false, val missing: Boolean = false,
     val clockReady: Boolean = false, val driftMs: Long? = null, val rttMs: Long = 0, val volume: Float = 0.8f,
     val guestControls: Boolean = false, val sharing: Boolean = false, val guestAdditions: Boolean = false, val serverFeatures: Set<String> = emptySet(), val pendingGuestSong: String = "", val pendingGuestSongs: List<String> = emptyList(), val audioAvailable: Set<String> = emptySet(), val audioManifestKnown: Boolean = false, val repeat: String = "off", val driving: Boolean = false,
@@ -111,7 +111,13 @@ class SyncCoordinator(private val context: Context, val dao: LibraryDao, prefere
         }
         update { it.copy(radarEnabled = started) }
     }
+    private var talkGrantTimeout: Job? = null
+    private fun clearTalkRequest() {
+        talkGrantTimeout?.cancel(); talkGrantTimeout = null
+        update { it.copy(talkPending = false) }
+    }
     fun pttRequest() {
+        if (state.value.talkPending) return
         if (!state.value.connected) { message("Join a session first to talk with another car."); return }
         if (state.value.speakerId != null) { message("Intercom is busy. Release the current speaker first."); return }
         if (!state.value.supportsVoice) { message("Intercom needs the newer convoy server. Update your Render deployment or use the matching local backend."); return }
@@ -119,9 +125,26 @@ class SyncCoordinator(private val context: Context, val dao: LibraryDao, prefere
             message("Microphone service could not start. Open CarSync and try again.")
             return
         }
-        if (ws?.send(JSONObject().put("type", "ptt_request").toString()) != true) { ConvoyForeground.stopMicrophone(context); message("Intercom connection unavailable. Reconnect and retry.") } else message("Requesting talk channel…")
+        if (ws?.send(JSONObject().put("type", "ptt_request").toString()) != true) {
+            ConvoyForeground.stopMicrophone(context)
+            message("Intercom connection unavailable. Reconnect and retry.")
+            return
+        }
+        update { it.copy(talkPending = true) }
+        message("Requesting talk channel…")
+        talkGrantTimeout?.cancel()
+        talkGrantTimeout = scope.launch {
+            delay(6500)
+            if (state.value.talkPending) {
+                clearTalkRequest()
+                ConvoyForeground.stopMicrophone(context)
+                ws?.send(JSONObject().put("type", "ptt_release").toString())
+                message("Talk request timed out. Check mobile data and retry.")
+            }
+        }
     }
     fun pttRelease() {
+        clearTalkRequest()
         convoyAudio.stopCapture()
         ConvoyForeground.stopMicrophone(context)
         if (state.value.speakerId == state.value.memberId) {
@@ -300,7 +323,7 @@ class SyncCoordinator(private val context: Context, val dao: LibraryDao, prefere
         else if (state.value.role == "local" && state.value.queue.isNotEmpty()) { if (prepare(PlaybackFrame(state.value.index, state.value.positionMs, false, 0.0, 0)) && state.value.requestedPlaying && !automotiveVideoBlocked()) p.play() }
         loops?.cancel(); loops = scope.launch { while (isActive) { tick(); delay(250) } }
     }
-    fun detach() { convoyAudio.close(); radar.stop(); discovery.stop(); ConvoyForeground.stopLocation(context); ConvoyForeground.stopMicrophone(context); player = null; preparedHash = ""; activeRevision = -1; discoveryTimeout?.cancel(); loops?.cancel(); scheduleJob?.cancel(); generation++; ws?.close(1000, "Service stopped"); ws = null; reconnect?.cancel(); update { it.copy(connected = false, playing = false, serviceReady = false) } }
+    fun detach() { clearTalkRequest(); convoyAudio.close(); radar.stop(); discovery.stop(); ConvoyForeground.stopLocation(context); ConvoyForeground.stopMicrophone(context); player = null; preparedHash = ""; activeRevision = -1; discoveryTimeout?.cancel(); loops?.cancel(); scheduleJob?.cancel(); generation++; ws?.close(1000, "Service stopped"); ws = null; reconnect?.cancel(); update { it.copy(connected = false, playing = false, serviceReady = false) } }
     fun shutdown() { detach(); vehicleSafety.close(); scope.cancel() }
     fun configure(endpoint: String, name: String) {
         require(!state.value.connected && state.value.code.isBlank()) { "Leave the current session before changing the server" }
@@ -355,11 +378,12 @@ class SyncCoordinator(private val context: Context, val dao: LibraryDao, prefere
         })
     }
     private fun lost() {
+        clearTalkRequest()
         convoyAudio.close()
         radar.stop()
         ConvoyForeground.stopMicrophone(context)
         ConvoyForeground.stopLocation(context)
-        update { it.copy(connected = false, radarEnabled = false, speakerId = null, clockReady = false, reconnectAttempt = attempts + 1, message = "Internet connection lost. Local media may continue; reconnecting automatically…") }
+        update { it.copy(connected = false, radarEnabled = false, speakerId = null, talkPending = false, clockReady = false, reconnectAttempt = attempts + 1, message = "Internet connection lost. Local media may continue; reconnecting automatically…") }
         scheduleJob?.cancel()
         if (reconnect?.isActive == true) return
         val delayMs = (1000L shl attempts.coerceAtMost(5)) + (0..500).random(); attempts++
@@ -388,6 +412,7 @@ class SyncCoordinator(private val context: Context, val dao: LibraryDao, prefere
                 if (hash.isNotBlank() && state.value.pendingGuestSong == hash) uploadGuestSong(hash)
             }
             "ptt_start" -> {
+                clearTalkRequest()
                 update { it.copy(speakerId = if (x.isNull("speakerId")) null else x.optString("speakerId")) }
                 convoyAudio.duck(true)
                 message(if (x.optString("speakerId") == state.value.memberId) "Microphone granted. Talking to other cars." else "Listening to another car…")
@@ -399,6 +424,7 @@ class SyncCoordinator(private val context: Context, val dao: LibraryDao, prefere
                 }
             }
             "ptt_stop" -> {
+                clearTalkRequest()
                 if (state.value.speakerId == state.value.memberId) ConvoyForeground.stopMicrophone(context)
                 convoyAudio.close()
                 update { it.copy(speakerId = null) }
@@ -406,6 +432,7 @@ class SyncCoordinator(private val context: Context, val dao: LibraryDao, prefere
             }
             "ptt_pcm" -> convoyAudio.receive(x.getString("data"))
             "ptt_denied" -> {
+                clearTalkRequest()
                 ConvoyForeground.stopMicrophone(context)
                 message(x.optString("reason", "Intercom is busy"))
             }
@@ -443,6 +470,12 @@ class SyncCoordinator(private val context: Context, val dao: LibraryDao, prefere
             }
             "error" -> {
                 val error = x.getString("error")
+                if (state.value.talkPending) {
+                    clearTalkRequest()
+                    ConvoyForeground.stopMicrophone(context)
+                    message("Talk request rejected: $error")
+                    return
+                }
                 if (state.value.pendingGuestSong.isNotBlank() && !state.value.busy) {
                     update { it.copy(pendingGuestSong = "") }
                     message("File skipped: $error")
