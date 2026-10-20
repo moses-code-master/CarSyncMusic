@@ -57,6 +57,7 @@ fun ConvoyDashboard(
                     state.code.isNotBlank() -> "○ Reconnecting · attempt ${state.reconnectAttempt}"
                     else -> "○ Not connected · create or join a convoy"
                 }, color = if (state.connected) BoardAccent else BoardMuted, fontSize = 12.sp, maxLines = 2)
+                Text("Created by Brayo", color = BoardMuted, fontSize = 10.sp)
             }
             Surface(color = BoardPanel, shape = RoundedCornerShape(24.dp)) {
                 Text(if (state.role.isNotBlank()) state.role.uppercase() else "OFFLINE",
@@ -145,7 +146,6 @@ fun ConvoyDashboard(
             DashboardShortcut("☷", "Playlist", Modifier.weight(1f), onPlaylist)
             DashboardShortcut("♙", "Cars", Modifier.weight(1f), onCars)
         }
-        Text("Created by Brayo", color = BoardMuted, fontSize = 11.sp, modifier = Modifier.align(Alignment.CenterHorizontally))
     }
 }
 
