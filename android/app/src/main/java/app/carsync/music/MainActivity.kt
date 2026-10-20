@@ -156,7 +156,7 @@ private val pages = listOf("Home", "Music Library", "Playlists", "Create Session
             }
         }) { insets ->
             Column(Modifier.fillMaxSize().padding(insets).verticalScroll(pageScroll).padding(20.dp), verticalArrangement = Arrangement.spacedBy(16.dp)) {
-                if (s.driving && page !in listOf("Now Playing", "Connected Cars", "Settings")) { Text("Driving mode: only playback and connection status are available."); LargeButton("Now Playing") { page = "Now Playing" } }
+                if (s.driving && page !in listOf("Home", "Now Playing", "Connected Cars", "Settings")) { Text("Driving mode: only playback and connection status are available."); LargeButton("Now Playing") { page = "Now Playing" } }
                 else when (page) {
                     "Home" -> {
                         ConvoyDashboard(s,
