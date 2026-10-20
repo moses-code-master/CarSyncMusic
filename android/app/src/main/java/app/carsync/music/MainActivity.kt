@@ -133,7 +133,7 @@ private val pages = listOf("Home", "Music Library", "Playlists", "Create Session
     val colors = darkColorScheme(primary = Accent, onPrimary = Color(0xFF162609), background = Color(0xFF0B1016), surface = Panel, onSurface = Color(0xFFF2F5FA), secondary = Color(0xFF92BFFF))
     MaterialTheme(colorScheme = colors) {
         Scaffold(topBar = {
-            Column(Modifier.background(Color(0xFF0C1017)).statusBarsPadding().padding(horizontal = 20.dp, vertical = 10.dp)) {
+            if (page != "Home") Column(Modifier.background(Color(0xFF0C1017)).statusBarsPadding().padding(horizontal = 20.dp, vertical = 10.dp)) {
                 Row(verticalAlignment = Alignment.CenterVertically) {
                     Icon(painterResource(R.drawable.ic_wave), null, tint = Accent, modifier = Modifier.size(34.dp)); Spacer(Modifier.width(12.dp))
                     Column(Modifier.weight(1f)) {
@@ -147,7 +147,7 @@ private val pages = listOf("Home", "Music Library", "Playlists", "Create Session
         }, bottomBar = {
             Column(Modifier.fillMaxWidth().background(Panel)) {
                 if (s.busy) LinearProgressIndicator(Modifier.fillMaxWidth())
-                Text(s.message, color = if (s.audioError.isNotBlank()) Color(0xFFFFB19F) else Muted, fontSize = 13.sp, maxLines = 3, modifier = Modifier.padding(horizontal = 16.dp, vertical = 8.dp))
+                Text(s.message, color = if (s.audioError.isNotBlank()) Color(0xFFFFB19F) else Muted, fontSize = if (page == "Home") 11.sp else 13.sp, maxLines = if (page == "Home") 1 else 3, overflow = TextOverflow.Ellipsis, modifier = Modifier.padding(horizontal = 16.dp, vertical = if (page == "Home") 4.dp else 8.dp))
                 NavigationBar(containerColor = Color(0xFF10171F)) {
                     val nav = listOf("Home" to Icons.Default.Home, "Music Library" to Icons.Default.List, "Videos" to Icons.Default.PlayArrow, "Now Playing" to Icons.Default.PlayArrow, "Create Session" to Icons.Default.Share, "Settings" to Icons.Default.Settings)
                     val labels = mapOf("Home" to "Home", "Music Library" to "Library", "Videos" to "Videos", "Now Playing" to "Player", "Create Session" to "Session", "Settings" to "Settings")
@@ -155,7 +155,7 @@ private val pages = listOf("Home", "Music Library", "Playlists", "Create Session
                 }
             }
         }) { insets ->
-            Column(Modifier.fillMaxSize().padding(insets).verticalScroll(pageScroll).padding(20.dp), verticalArrangement = Arrangement.spacedBy(16.dp)) {
+            Column(Modifier.fillMaxSize().padding(insets).verticalScroll(pageScroll).padding(if (page == "Home") 8.dp else 20.dp), verticalArrangement = Arrangement.spacedBy(if (page == "Home") 6.dp else 16.dp)) {
                 if (s.driving && page !in listOf("Home", "Now Playing", "Connected Cars", "Settings")) { Text("Driving mode: only playback and connection status are available."); LargeButton("Now Playing") { page = "Now Playing" } }
                 else when (page) {
                     "Home" -> {
