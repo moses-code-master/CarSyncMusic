@@ -18,6 +18,34 @@ export function createServer({ dataDir = process.env.DATA_DIR || './data', port 
   let closing = false;
   const metric = (s, m, event, status = {}) => { if (!closing) db.prepare('INSERT INTO telemetry VALUES(?,?,?,?,?,?,?,?)').run(s.code, m.id, now(), event, status.driftMs ?? null, status.rttMs ?? null, status.buffered ? 1 : 0, status.missing ? 1 : 0); };
   const sessions = new Map(), peers = new Map(), rates = new Map();
+  // Ephemeral voice floor and position data never enter the session database.
+  const floors = new Map(), frameRates = new Map();
+  const announce = (session, payload, exceptId = null) => {
+    for (const member of session.members) {
+      if (member.id !== exceptId) send(peers.get(member.id)?.ws, payload);
+    }
+  };
+  function releaseFloor(session, speakerId = null) {
+    const current = floors.get(session.code);
+    if (!current || (speakerId && current.memberId !== speakerId)) return false;
+    floors.delete(session.code);
+    announce(session, { type: 'ptt_stop', speakerId: current.memberId });
+    return true;
+  }
+  function validPosition(p) {
+    if (typeof p?.lat !== 'number' || typeof p?.lon !== 'number' ||
+      !Number.isFinite(p.lat) || !Number.isFinite(p.lon) ||
+      Math.abs(p.lat) > 90 || Math.abs(p.lon) > 180) throw Error('Invalid location');
+    const speed = Number(p.speed ?? 0), bearing = Number(p.bearing ?? 0), accuracy = Number(p.accuracy ?? 1000);
+    if (![speed, bearing, accuracy].every(Number.isFinite) ||
+      speed < 0 || speed > 120 || bearing < 0 || bearing > 360 || accuracy < 0 || accuracy > 10000) throw Error('Invalid location metadata');
+    return {lat:p.lat,lon:p.lon,speed,bearing,accuracy,at:now()};
+  }
+  const voteTotals = s => {
+    const totals = {};
+    for (const hash of Object.values(s.votes || {})) if (s.playlist.some(t => t.hash === hash)) totals[hash] = (totals[hash] || 0) + 1;
+    return totals;
+  };
   let reservedBytes = 0;
   const uploads = new Set();
   for (const row of db.prepare('SELECT * FROM sessions').all()) {
@@ -31,9 +59,13 @@ export function createServer({ dataDir = process.env.DATA_DIR || './data', port 
   const save = s => db.prepare('INSERT OR REPLACE INTO sessions VALUES(?,?)').run(s.code, JSON.stringify(s));
   const fail = (res, status, error) => { res.writeHead(status, { 'Content-Type': 'application/json' }); res.end(JSON.stringify({ error })); };
   const send = (ws, x) => { if (ws.readyState === WebSocket.OPEN) ws.send(JSON.stringify(x)); };
-  const cars = s => s.members.map(m => ({ id: m.id, name: m.name, role: m.role, online: peers.has(m.id), ...(peers.get(m.id)?.status || {}) }));
+  const cars = s => s.members.map(m => {
+    const peer = peers.get(m.id);
+    const livePosition = peer?.location && now() - peer.location.at < 10000 ? peer.location : null;
+    return { id: m.id, name: m.name, role: m.role, online: !!peer, ...(peer?.status || {}), ...(livePosition ? { location: livePosition } : {}) };
+  });
   function snapshot(s) {
-    return { type: 'state', mediaProtocol: 2, maxGuests, code: s.code, playlist: s.playlist, audioAvailable: s.sharing ? s.playlist.filter(t => t.mediaType !== 'video' && existsSync(join(dataDir, `${s.code}-${t.hash}.mp3`))).map(t => t.hash) : [], frame: s.frame, previous: s.previous, repeat: s.repeat, sharing: s.sharing, guestControls: s.guestControls, expiresAt: s.expiresAt, serverNow: now(), cars: cars(s) };
+    return { type: 'state', mediaProtocol: 2, maxGuests, code: s.code, playlist: s.playlist, audioAvailable: s.sharing ? s.playlist.filter(t => t.mediaType !== 'video' && existsSync(join(dataDir, `${s.code}-${t.hash}.mp3`))).map(t => t.hash) : [], frame: s.frame, previous: s.previous, repeat: s.repeat, sharing: s.sharing, guestControls: s.guestControls, votes: voteTotals(s), myVotes: s.votes || {}, speakerId: floors.get(s.code)?.memberId || null, expiresAt: s.expiresAt, serverNow: now(), cars: cars(s) };
   }
   const broadcast = s => {
     const state = snapshot(s), video = s.playlist.some(t => t.mediaType === 'video');
@@ -73,7 +105,7 @@ export function createServer({ dataDir = process.env.DATA_DIR || './data', port 
         if (limited(req.socket.remoteAddress + ':create', 10)) return fail(res, 429, 'Too many sessions; retry in a minute');
         const b = await json(req), raw = token(); let c; do { c = code(); } while (sessions.has(c));
         const member = { id: token(), name: String(b.name || 'Host car').slice(0, 40), role: 'host', tokenHash: digest(raw) };
-        const s = { code: c, members: [member], playlist: [], repeat: 'off', sharing: false, guestControls: false, expiresAt: now() + 24 * 3600000, frame: { index: 0, positionMs: 0, playing: false, executeAt: now(), revision: 0 }, previous: null, seen: [] };
+        const s = { code: c, members: [member], playlist: [], repeat: 'off', sharing: false, guestControls: false, expiresAt: now() + 24 * 3600000, frame: { index: 0, positionMs: 0, playing: false, executeAt: now(), revision: 0 }, previous: null, seen: [], votes: {} };
         sessions.set(c, s); save(s); res.setHeader('Content-Type', 'application/json'); res.end(JSON.stringify({ code: c, token: raw, memberId: member.id, role: member.role })); return;
       }
       const match = path.match(/^\/sessions\/(\d{6})(?:\/(join|audio|metrics)(?:\/([a-f0-9]{64}))?)?$/);
@@ -96,7 +128,7 @@ export function createServer({ dataDir = process.env.DATA_DIR || './data', port 
       if (!route && req.method === 'GET') { res.setHeader('Content-Type', 'application/json'); res.end(JSON.stringify(snapshot(s))); return; }
       if (!route && req.method === 'DELETE' && member.role === 'host') {
         for (const m of s.members) peers.get(m.id)?.ws.close(4001, 'Session ended');
-        sessions.delete(c); db.prepare('DELETE FROM sessions WHERE code=?').run(c); db.prepare('DELETE FROM telemetry WHERE code=?').run(c); removeAudio(c); res.end('{}'); return;
+        releaseFloor(s); sessions.delete(c); db.prepare('DELETE FROM sessions WHERE code=?').run(c); db.prepare('DELETE FROM telemetry WHERE code=?').run(c); removeAudio(c); res.end('{}'); return;
       }
       if (route === 'audio' && hash) {
         if (!s.sharing) return fail(res, 403, 'Host has not permitted audio sharing');
@@ -148,11 +180,40 @@ export function createServer({ dataDir = process.env.DATA_DIR || './data', port 
           const s = sessions.get(b.code), member = s?.members.find(m => m.tokenHash === digest(b.token));
           if (!member || s.expiresAt < now()) { ws.close(4003, 'Invalid or expired session'); return; }
           context = { s, member }; clearTimeout(deadline);
-          peers.get(member.id)?.ws.close(4002, 'Another connection resumed this car'); peers.set(member.id, { ws, video: Array.isArray(b.mediaCapabilities) && b.mediaCapabilities.includes('video') }); metric(s, member, 'online'); broadcast(s); return;
+          peers.get(member.id)?.ws.close(4002, 'Another connection resumed this car'); releaseFloor(s, member.id); peers.set(member.id, { ws, video: Array.isArray(b.mediaCapabilities) && b.mediaCapabilities.includes('video') }); metric(s, member, 'online'); broadcast(s); return;
         }
         const { s, member } = context;
         if (s.expiresAt < now() || !sessions.has(s.code)) { ws.close(4001, 'Session expired'); return; }
         if (b.type === 'ping') { const t1 = now(); send(ws, { type: 'pong', clientTime: b.clientTime, t1, t2: now() }); return; }
+        // Voice frames are paced separately from playback mutations.
+        if (b.type === 'ptt_request') {
+          if (limited(member.id + ':ptt_requests', 12)) throw Error('Too many PTT requests');
+          const floor = floors.get(s.code);
+          if (floor && floor.memberId !== member.id) { send(ws, {type:'ptt_denied',reason:'Channel busy'}); return; }
+          floors.set(s.code, {memberId:member.id,until:now()+8000});
+          announce(s, {type:'ptt_start',speakerId:member.id,name:member.name});
+          return;
+        }
+        if (b.type === 'ptt_release') { releaseFloor(s, member.id); return; }
+        if (b.type === 'ptt_pcm') {
+          const floor = floors.get(s.code);
+          if (!floor || floor.memberId !== member.id) return;
+          const rateKey = member.id + ':ptt_frames';
+          if (limited(rateKey, 65, 1000)) return;
+          if (typeof b.data !== 'string' || b.data.length > 2000 || !/^[A-Za-z0-9+/]+={0,2}$/.test(b.data)) return;
+          const bytes = Buffer.from(b.data, 'base64');
+          if (bytes.length !== 640) return; // 20 ms, PCM16 mono at 16 kHz
+          floor.until = now() + 8000;
+          announce(s, {type:'ptt_pcm',speakerId:member.id,data:b.data}, member.id);
+          return;
+        }
+        if (b.type === 'location') {
+          if (limited(member.id + ':locations', 30, 60000)) return;
+          const p = peers.get(member.id);
+          if (p?.ws === ws) p.location = b.enabled === false ? null : validPosition(b);
+          broadcastCars(s);
+          return;
+        }
         if (limited(member.id + ':messages', 180)) throw Error('Too many commands');
         if (b.type === 'status') {
           const p = peers.get(member.id);
@@ -161,13 +222,25 @@ export function createServer({ dataDir = process.env.DATA_DIR || './data', port 
           broadcastCars(s); return;
         }
         if (b.type === 'snapshot') { send(ws, snapshot(s)); return; }
-        if (member.role !== 'host' && !(s.guestControls && b.type === 'control' && b.action?.kind !== 'ended')) throw Error('Host controls only');
+        if (member.role !== 'host' && b.type !== 'vote_track' &&
+          !(s.guestControls && b.type === 'control' && b.action?.kind !== 'ended')) throw Error('Host controls only');
         if (!/^[a-zA-Z0-9-]{8,80}$/.test(b.id || '')) throw Error('Command ID required');
         if (s.seen.includes(b.id)) { send(ws, { type: 'ack', id: b.id }); return; }
-        if (b.type === 'control') schedule(s, b.action);
+        if (b.type === 'vote_track') {
+          if (!/^[a-f0-9]{64}$/.test(b.hash || '') || !s.playlist.some(t => t.hash === b.hash)) throw Error('Unknown track');
+          const current = effective(s, now()).index;
+          if (s.playlist.findIndex(t => t.hash === b.hash) <= current) throw Error('Only upcoming songs can receive votes');
+          s.votes ||= {};
+          if (s.votes[member.id] === b.hash) delete s.votes[member.id]; else s.votes[member.id] = b.hash;
+          const totals = voteTotals(s);
+          const end = current + 1;
+          const upcoming = s.playlist.slice(end).map((track, i) => ({track,i}));
+          upcoming.sort((a,b) => (totals[b.track.hash] || 0) - (totals[a.track.hash] || 0) || a.i - b.i);
+          s.playlist.splice(end,s.playlist.length-end,...upcoming.map(x=>x.track));
+        } else if (b.type === 'control') schedule(s, b.action);
         else if (b.type === 'playlist') {
           const playlist = validatePlaylist(b.playlist);
-          s.previous = effective(s, now()); s.playlist = playlist;
+          s.previous = effective(s, now()); s.playlist = playlist; s.votes = {};
           s.frame = { index: 0, positionMs: 0, playing: false, executeAt: now() + 1800, revision: s.frame.revision + 1 };
         } else if (b.type === 'settings') {
           s.guestControls = !!b.guestControls; const was = s.sharing; s.sharing = !!b.sharing;
@@ -177,12 +250,12 @@ export function createServer({ dataDir = process.env.DATA_DIR || './data', port 
         s.seen.push(b.id); s.seen = s.seen.slice(-512); save(s); send(ws, { type: 'ack', id: b.id }); broadcast(s);
       } catch (e) { send(ws, { type: 'error', error: e.message }); }
     });
-    ws.on('close', () => { clearTimeout(deadline); if (context && peers.get(context.member.id)?.ws === ws) { peers.delete(context.member.id); metric(context.s, context.member, 'offline'); broadcast(context.s); } });
+    ws.on('close', () => { clearTimeout(deadline); if (context && peers.get(context.member.id)?.ws === ws) { releaseFloor(context.s, context.member.id); peers.delete(context.member.id); metric(context.s, context.member, 'offline'); broadcast(context.s); } });
     ws.on('error', () => {});
   });
   function removeAudio(c) { for (const f of readdirSync(dataDir)) if (f.startsWith(c + '-') && (f.endsWith('.mp3') || f.endsWith('.tmp'))) try { unlinkSync(join(dataDir, f)); } catch {} }
   const cleanup = setInterval(() => {
-    for (const [c, s] of sessions) if (s.expiresAt < now()) { sessions.delete(c); removeAudio(c); db.prepare('DELETE FROM sessions WHERE code=?').run(c); for (const m of s.members) peers.get(m.id)?.ws.close(4001, 'Session expired'); }
+    for (const [c, s] of sessions) if (s.expiresAt < now()) { releaseFloor(s); sessions.delete(c); removeAudio(c); db.prepare('DELETE FROM sessions WHERE code=?').run(c); for (const m of s.members) peers.get(m.id)?.ws.close(4001, 'Session expired'); }
     for (const [key, a] of rates) if (now() - a.at(-1) > 60000) rates.delete(key);
     db.prepare('DELETE FROM telemetry WHERE at<?').run(now() - 24 * 3600000);
   }, 60000).unref();
@@ -195,9 +268,16 @@ export function createServer({ dataDir = process.env.DATA_DIR || './data', port 
       }
     }
   }, 250).unref();
+  const floorExpiry = setInterval(() => {
+    for (const [code, floor] of floors) {
+      const session = sessions.get(code);
+      if (!session) floors.delete(code);
+      else if (floor.until <= now()) releaseFloor(session);
+    }
+  }, 1000).unref();
   const heartbeat = setInterval(() => { for (const ws of wss.clients) { if (ws.alive === false) ws.terminate(); else { ws.alive = false; ws.ping(); } } }, 15000).unref();
   wss.on('connection', ws => { ws.alive = true; ws.on('pong', () => { ws.alive = true; }); });
-  return { server, sessions, listen: () => new Promise(resolve => server.listen(port, '0.0.0.0', resolve)), close: async () => { closing = true; clearInterval(cleanup); clearInterval(advance); clearInterval(heartbeat); for (const ws of wss.clients) ws.terminate(); await new Promise(r => wss.close(r)); await new Promise(r => server.close(r)); db.close(); } };
+  return { server, sessions, listen: () => new Promise(resolve => server.listen(port, '0.0.0.0', resolve)), close: async () => { closing = true; clearInterval(cleanup); clearInterval(advance); clearInterval(heartbeat); clearInterval(floorExpiry); for (const ws of wss.clients) ws.terminate(); await new Promise(r => wss.close(r)); await new Promise(r => server.close(r)); db.close(); } };
 }
 if (process.argv[1] && import.meta.url === pathToFileURL(process.argv[1]).href) {
   const app = createServer(); await app.listen(); console.log(`CarSync server listening on ${app.server.address().port}`);
