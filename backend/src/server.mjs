@@ -112,7 +112,7 @@ export function createServer({ dataDir = process.env.DATA_DIR || './data', port 
         if (limited(req.socket.remoteAddress + ':create', 10)) return fail(res, 429, 'Too many sessions; retry in a minute');
         const b = await json(req), raw = token(); let c; do { c = code(); } while (sessions.has(c));
         const member = { id: token(), name: String(b.name || 'Host car').slice(0, 40), role: 'host', tokenHash: digest(raw) };
-        const s = { code: c, members: [member], playlist: [], repeat: 'off', sharing: false, guestControls: true, guestAdditions: false, expiresAt: now() + 24 * 3600000, frame: { index: 0, positionMs: 0, playing: false, executeAt: now(), revision: 0 }, previous: null, seen: [], votes: {} };
+        const s = { code: c, members: [member], playlist: [], repeat: 'off', sharing: false, guestControls: false, guestAdditions: false, expiresAt: now() + 24 * 3600000, frame: { index: 0, positionMs: 0, playing: false, executeAt: now(), revision: 0 }, previous: null, seen: [], votes: {} };
         sessions.set(c, s); save(s); res.setHeader('Content-Type', 'application/json'); res.end(JSON.stringify({ code: c, token: raw, memberId: member.id, role: member.role })); return;
       }
       const match = path.match(/^\/sessions\/(\d{6})(?:\/(join|audio|metrics)(?:\/([a-f0-9]{64}))?)?$/);
