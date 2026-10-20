@@ -44,8 +44,8 @@ fun ConvoyDashboard(
     val canRequest = intercomReady && (speakerIsMe || state.talkPending || state.speakerId == null)
     val track = state.track
     Column(
-        modifier = Modifier.fillMaxWidth().background(BoardBackground, RoundedCornerShape(16.dp)).padding(12.dp),
-        verticalArrangement = Arrangement.spacedBy(12.dp)
+        modifier = Modifier.fillMaxWidth().background(BoardBackground, RoundedCornerShape(16.dp)).padding(10.dp),
+        verticalArrangement = Arrangement.spacedBy(9.dp)
     ) {
         Row(verticalAlignment = Alignment.CenterVertically) {
             Text("♧", color = BoardAccent, fontSize = 28.sp)
@@ -96,19 +96,19 @@ fun ConvoyDashboard(
             }
             val progress = if (track?.durationMs != null && track.durationMs > 0L)
                 (state.positionMs.toFloat() / track.durationMs.toFloat()).coerceIn(0f, 1f) else 0f
-            LinearProgressIndicator(
-                progress = { progress },
-                modifier = Modifier.fillMaxWidth().height(5.dp),
-                color = BoardAccent,
-                trackColor = Color(0xFF4C5762)
-            )
+            Box(Modifier.fillMaxWidth().height(5.dp).background(Color(0xFF4C5762), RoundedCornerShape(10.dp))) {
+                if (progress > 0f) Box(
+                    Modifier.fillMaxWidth(progress).fillMaxHeight()
+                        .background(BoardAccent, RoundedCornerShape(10.dp))
+                )
+            }
             if (track != null && state.missing) Text("Media unavailable on this car · import or request sharing.", color = Color(0xFFFFC68D), fontSize = 11.sp)
         }
 
         Button(
             onClick = { if (speakerIsMe || state.talkPending) onTalk() else if (!channelBusy && intercomReady) onTalk() },
             enabled = canRequest,
-            modifier = Modifier.fillMaxWidth().heightIn(min = 112.dp),
+            modifier = Modifier.fillMaxWidth().heightIn(min = 100.dp),
             colors = ButtonDefaults.buttonColors(
                 containerColor = BoardAccent, contentColor = Color(0xFF14200F),
                 disabledContainerColor = Color(0xFF526644), disabledContentColor = Color(0xFFD9E1D5)),
@@ -151,7 +151,7 @@ fun ConvoyDashboard(
 
 @Composable
 private fun ConvoyStat(value: String, subtitle: String, modifier: Modifier = Modifier) {
-    Column(modifier.background(BoardPanel, RoundedCornerShape(10.dp)).heightIn(min = 62.dp).padding(horizontal = 4.dp, vertical = 8.dp),
+    Column(modifier.background(BoardPanel, RoundedCornerShape(10.dp)).heightIn(min = 57.dp).padding(horizontal = 4.dp, vertical = 8.dp),
         horizontalAlignment = Alignment.CenterHorizontally, verticalArrangement = Arrangement.Center) {
         Text(value, color = BoardWhite, fontWeight = FontWeight.Bold, fontSize = 17.sp,
             maxLines = 1, overflow = TextOverflow.Ellipsis)
@@ -162,7 +162,7 @@ private fun ConvoyStat(value: String, subtitle: String, modifier: Modifier = Mod
 @Composable
 private fun DashboardShortcut(symbol: String, text: String, modifier: Modifier = Modifier, enabled: Boolean = true, action: () -> Unit) {
     Column(modifier.background(BoardPanel, RoundedCornerShape(9.dp)).clickable(enabled = enabled, onClick = action)
-        .heightIn(min = 74.dp).padding(horizontal = 3.dp, vertical = 11.dp),
+        .heightIn(min = 64.dp).padding(horizontal = 3.dp, vertical = 11.dp),
         horizontalAlignment = Alignment.CenterHorizontally, verticalArrangement = Arrangement.SpaceEvenly) {
         Text(symbol, color = if (enabled) BoardWhite else BoardMuted, fontSize = 20.sp)
         Text(text, color = if (enabled) BoardWhite else BoardMuted, fontSize = 12.sp, maxLines = 1)
