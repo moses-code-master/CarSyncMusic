@@ -22,7 +22,7 @@ data class Car(
     val memberId: String = "", val location: ConvoyPosition? = null
 )
 data class AppState(
-    val endpoint: String = "https://carsync-music.onrender.com", val carName: String = "My car", val code: String = "", val role: String = "", val connected: Boolean = false,
+    val endpoint: String = ServerDefaults.CONVOY_URL, val carName: String = "My car", val code: String = "", val role: String = "", val connected: Boolean = false,
     val library: List<Track> = emptyList(), val playlists: List<SavedPlaylist> = emptyList(), val queue: List<RemoteTrack> = emptyList(), val cars: List<Car> = emptyList(), val maxGuests: Int = 10, val speakerId: String? = null, val memberId: String = "", val votes: Map<String, Int> = emptyMap(), val radarEnabled: Boolean = false, val discoveredServer: String = "",
     val index: Int = 0, val positionMs: Long = 0, val playing: Boolean = false, val buffering: Boolean = false, val missing: Boolean = false,
     val clockReady: Boolean = false, val driftMs: Long? = null, val rttMs: Long = 0, val volume: Float = 0.8f,
@@ -41,9 +41,14 @@ data class AppState(
 
 class SyncCoordinator(private val context: Context, val dao: LibraryDao, preferencesName: String = "session") {
     private val prefs = context.getSharedPreferences(preferencesName, Context.MODE_PRIVATE)
+    private val initialEndpoint = ServerDefaults.resolve(
+        prefs.getString("endpoint", null),
+        prefs.getBoolean("manualServer", false),
+        !prefs.getString("code", "").isNullOrBlank()
+    )
     private val scope = CoroutineScope(SupervisorJob() + Dispatchers.Main.immediate)
     val http = OkHttpClient.Builder().connectTimeout(10, java.util.concurrent.TimeUnit.SECONDS).readTimeout(30, java.util.concurrent.TimeUnit.SECONDS).pingInterval(10, java.util.concurrent.TimeUnit.SECONDS).build()
-    private val mutable = MutableStateFlow(AppState(endpoint = prefs.getString("endpoint", "https://carsync-music.onrender.com")!!.ifBlank { "https://carsync-music.onrender.com" }, carName = prefs.getString("name", "My car")!!, code = prefs.getString("code", "")!!, role = prefs.getString("role", "")!!, memberId = prefs.getString("memberId", "")!!, latencyMs = prefs.getLong("latency", 0), driving = prefs.getBoolean("driving", false)))
+    private val mutable = MutableStateFlow(AppState(endpoint = initialEndpoint, carName = prefs.getString("name", "My car")!!, code = prefs.getString("code", "")!!, role = prefs.getString("role", "")!!, memberId = prefs.getString("memberId", "")!!, latencyMs = prefs.getLong("latency", 0), driving = prefs.getBoolean("driving", false)))
     val state: StateFlow<AppState> = mutable.asStateFlow()
     private var bearer = prefs.getString("token", "")!!
     private var ws: WebSocket? = null
@@ -198,6 +203,12 @@ class SyncCoordinator(private val context: Context, val dao: LibraryDao, prefere
         if (uri.scheme == "carsync" && uri.host == "join") update { it.copy(invitationCode = uri.getQueryParameter("code") ?: "", invitationServer = uri.getQueryParameter("server") ?: "", message = "Review the invitation server address before joining.") }
     }
     init {
+        // Existing v1.6 phones migrate off the old default unless they are still in
+        // a session or have explicitly chosen a custom server.
+        if (prefs.getString("code", "").isNullOrBlank() &&
+            prefs.getString("endpoint", null) != initialEndpoint) {
+            prefs.edit().putString("endpoint", initialEndpoint).apply()
+        }
         update { it.copy(automotive = vehicleSafety.automotive, vehicleRestricted = vehicleSafety.automotive) }; vehicleSafety.start()
         scope.launch { dao.observeTracks().collect { list -> update { it.copy(library = list) }; if (state.value.missing) desired?.let { schedule(it, true) } } }
         scope.launch { dao.observePlaylists().collect { list -> update { it.copy(playlists = list) } } }
@@ -233,7 +244,7 @@ class SyncCoordinator(private val context: Context, val dao: LibraryDao, prefere
         val url = clean.toHttpUrlOrNull() ?: error("Enter a full http:// or https:// server address")
         require(url.encodedPath == "/" && url.query == null && url.username.isEmpty() && url.password.isEmpty()) { "Use the server root address without paths or credentials" }
         require(url.isHttps || isLanHost(url.host)) { "Public servers require HTTPS. HTTP is allowed only on a private network." }
-        prefs.edit().putString("endpoint", clean).putString("name", name.take(40)).apply(); update { it.copy(endpoint = clean, carName = name.take(40)) }
+        prefs.edit().putString("endpoint", clean).putBoolean("manualServer", true).putString("name", name.take(40)).apply(); update { it.copy(endpoint = clean, carName = name.take(40)) }
     }
     fun create() = establish(null)
     fun join(code: String) = establish(code)
@@ -598,8 +609,12 @@ class SyncCoordinator(private val context: Context, val dao: LibraryDao, prefere
     fun resume() { if (bearer.isNotBlank() && !state.value.connected) connect() }
     fun leave(clearMessage: Boolean = true) { convoyAudio.close(); radar.stop(); ConvoyForeground.stopLocation(context); ConvoyForeground.stopMicrophone(context);
         generation++; reconnect?.cancel(); ws?.close(1000, "Left session"); ws = null; scheduleJob?.cancel(); player?.pause(); player?.clearMediaItems(); preparedHash = ""; desired = null; activeRevision = -1; bearer = ""
-        prefs.edit().remove("token").remove("code").remove("role").remove("memberId").apply()
-        update { it.copy(code = "", role = "", memberId = "", radarEnabled = false, speakerId = null, serverFeatures = emptySet(), guestAdditions = false, pendingGuestSong = "", connected = false, queue = emptyList(), cars = emptyList(), clockReady = false, driftMs = null, requestedPlaying = false, audioError = "", message = if (clearMessage) "Session left. The host can create a new session for the group." else it.message) }
+        val nextEndpoint = ServerDefaults.resolve(
+            state.value.endpoint, prefs.getBoolean("manualServer", false), false
+        )
+        prefs.edit().remove("token").remove("code").remove("role").remove("memberId")
+            .putString("endpoint", nextEndpoint).apply()
+        update { it.copy(endpoint = nextEndpoint, code = "", role = "", memberId = "", radarEnabled = false, speakerId = null, serverFeatures = emptySet(), guestAdditions = false, pendingGuestSong = "", connected = false, queue = emptyList(), cars = emptyList(), clockReady = false, driftMs = null, requestedPlaying = false, audioError = "", message = if (clearMessage) "Session left. The host can create a new session for the group." else it.message) }
     }
     fun endSession() { scope.launch { try { withContext(Dispatchers.IO) { request("/sessions/${state.value.code}", "DELETE") }; leave() } catch (e: Exception) { message(e.message ?: "Could not end session") } } }
 }
