@@ -178,7 +178,7 @@ export function createServer({ dataDir = process.env.DATA_DIR || './data', port 
           return;
         }
         if (['GET', 'HEAD'].includes(req.method)) {
-          if (!existsSync(file)) return fail(res, 404, 'Media file not uploaded; import identical local file or ask uploader to share');
+          if (!existsSync(file)) return fail(res, 404, 'Media file not uploaded; import identical MP3/MP4 locally or ask uploader to share');
           const size = statSync(file).size, range = req.headers.range;
           let start = 0, end = size - 1, status = 200;
           if (range) {
