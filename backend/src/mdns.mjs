@@ -7,7 +7,7 @@ const PORT = 5353;
 const TYPE = { A: 1, PTR: 12, TXT: 16, SRV: 33 };
 
 export function encodeName(value) {
-  const segments = value.split('.');
+  const segments = value.replace(/\\.$/, '').split('.');
   return Buffer.concat([...segments.map(segment => {
     const bytes = Buffer.from(segment, 'utf8');
     if (!bytes.length || bytes.length > 63) throw Error('Invalid DNS-SD label');
