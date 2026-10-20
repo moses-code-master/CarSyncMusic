@@ -29,10 +29,11 @@ data class AppState(
     val guestControls: Boolean = false, val sharing: Boolean = false, val guestAdditions: Boolean = false, val serverFeatures: Set<String> = emptySet(), val pendingGuestSong: String = "", val pendingGuestSongs: List<String> = emptyList(), val audioAvailable: Set<String> = emptySet(), val audioManifestKnown: Boolean = false, val repeat: String = "off", val driving: Boolean = false,
     val latencyMs: Long = 0, val message: String = "Import MP3s and create or join a session.", val busy: Boolean = false,
     val invitationCode: String = "", val invitationServer: String = "", val serviceReady: Boolean = false, val requestedPlaying: Boolean = false, val audioError: String = "",
-    val parkedConfirmed: Boolean = false, val audioOnlyVideo: Boolean = false, val automotive: Boolean = false, val vehicleKnown: Boolean = false, val vehicleRestricted: Boolean = false, val mediaProtocol: Int = 1, val acousticProbeMs: Long? = null, val acousticVariationMs: Long? = null, val acousticProfileReliable: Boolean = false
+    val parkedConfirmed: Boolean = false, val audioOnlyVideo: Boolean = false, val automotive: Boolean = false, val vehicleKnown: Boolean = false, val vehicleRestricted: Boolean = false, val mediaProtocol: Int = 1, val radioStatus: String = "Waiting for a radio connection", val acousticProbeMs: Long? = null, val acousticVariationMs: Long? = null, val acousticProfileReliable: Boolean = false
 ) {
     val canControl get() = role == "host" || role == "local" || guestControls
     val supportsVoice get() = "convoy_ptt_pcm16_v1" in serverFeatures
+    val supportsCompactRadio get() = "convoy_ptt_mulaw_v1" in serverFeatures
     val supportsRadar get() = "convoy_location_v1" in serverFeatures
     val supportsGuestMusic get() = "guest_music_upload_v1" in serverFeatures
     val track get() = queue.getOrNull(index)
@@ -56,8 +57,12 @@ class SyncCoordinator(private val context: Context, val dao: LibraryDao, prefere
     private var bearer = prefs.getString("token", "")!!
     private var ws: WebSocket? = null
     private val convoyAudio = ConvoyAudio(context, { player },
-        { data -> ws?.send(JSONObject().put("type", "ptt_pcm").put("data", data).toString()) },
-        { reason -> scope.launch { message(reason); pttRelease() } }
+        { codec, data ->
+            val type = if (codec == "mulaw16") "ptt_mulaw" else "ptt_pcm"
+            ws?.send(JSONObject().put("type", type).put("data", data).toString())
+        },
+        { reason -> scope.launch { message(reason); pttRelease() } },
+        { detail -> scope.launch { update { it.copy(radioStatus = detail) } } }
     )
     private var recentMovingAtMs = -100000L
     private val radar = ConvoyRadar(context) { loc ->
@@ -392,7 +397,7 @@ class SyncCoordinator(private val context: Context, val dao: LibraryDao, prefere
         ws?.close(1000, "Reconnect")
         val url = state.value.endpoint.replaceFirst("https://", "wss://").replaceFirst("http://", "ws://") + "/ws"
         ws = http.newWebSocket(Request.Builder().url(url).build(), object : WebSocketListener() {
-            override fun onOpen(webSocket: WebSocket, response: Response) { webSocket.send(JSONObject().put("type", "auth").put("code", state.value.code).put("token", bearer).put("mediaCapabilities", JSONArray(listOf("audio", "video"))).toString()) }
+            override fun onOpen(webSocket: WebSocket, response: Response) { webSocket.send(JSONObject().put("type", "auth").put("code", state.value.code).put("token", bearer).put("mediaCapabilities", JSONArray(listOf("audio", "video"))).put("voiceCodecs", JSONArray(listOf("mulaw16"))).toString()) }
             override fun onMessage(webSocket: WebSocket, text: String) { scope.launch { if (gen == generation) try { receive(JSONObject(text)) } catch (e: Exception) { message("Invalid server message: ${e.message}") } } }
             override fun onFailure(webSocket: WebSocket, t: Throwable, response: Response?) { scope.launch { if (gen == generation) lost() } }
             override fun onClosing(webSocket: WebSocket, code: Int, reason: String) {
@@ -465,7 +470,8 @@ class SyncCoordinator(private val context: Context, val dao: LibraryDao, prefere
                 update { it.copy(speakerId = null) }
                 message("Intercom ready. Tap Start talking.")
             }
-            "ptt_pcm" -> convoyAudio.receive(x.getString("data"))
+            "ptt_pcm" -> convoyAudio.receive(x.getString("data"), "pcm16")
+            "ptt_mulaw" -> convoyAudio.receive(x.getString("data"), "mulaw16")
             "ptt_denied" -> {
                 clearTalkRequest()
                 ConvoyForeground.stopMicrophone(context)
@@ -488,10 +494,12 @@ class SyncCoordinator(private val context: Context, val dao: LibraryDao, prefere
                     (0 until values.length()).map { i -> values.optString(i) }.toSet()
                 } ?: emptySet()
                 val wasConnected = state.value.connected
+                convoyAudio.setCompactVoice("convoy_ptt_mulaw_v1" in advertised)
                 val sharingRevoked = state.value.sharing && !x.getBoolean("sharing")
                 val available = x.optJSONArray("audioAvailable")?.let { a -> (0 until a.length()).map { a.getString(it) }.toSet() } ?: emptySet()
                 val audioChanged = state.value.audioAvailable != available || state.value.sharing != x.getBoolean("sharing")
-                update { it.copy(connected = true, reconnectAttempt = 0, queue = queue, cars = cars, maxGuests = x.optInt("maxGuests", 1).coerceIn(1, 50), guestControls = x.getBoolean("guestControls"), guestAdditions = x.optBoolean("guestAdditions", false), serverFeatures = advertised, speakerId = if (x.isNull("speakerId")) null else x.optString("speakerId").takeIf { name -> name.isNotBlank() && name != "null" }, votes = x.optJSONObject("votes")?.let { obj -> obj.keys().asSequence().associateWith { key -> obj.optInt(key) } } ?: emptyMap(), sharing = x.getBoolean("sharing"), audioAvailable = available, audioManifestKnown = x.has("audioAvailable"), mediaProtocol = x.optInt("mediaProtocol", 1), repeat = x.getString("repeat"), message = if (!wasConnected) "Session connected. Matching clocks…" else it.message) }
+                update { it.copy(connected = true, reconnectAttempt = 0, queue = queue, cars = cars, maxGuests = x.optInt("maxGuests", 1).coerceIn(1, 50), guestControls = x.getBoolean("guestControls"), guestAdditions = x.optBoolean("guestAdditions", false), serverFeatures = advertised,
+                    radioStatus = if ("convoy_ptt_mulaw_v1" in advertised) "Compact radio · G.711 16 kHz (half-size voice frames)" else "Compatible radio · PCM16 (uncompressed)", speakerId = if (x.isNull("speakerId")) null else x.optString("speakerId").takeIf { name -> name.isNotBlank() && name != "null" }, votes = x.optJSONObject("votes")?.let { obj -> obj.keys().asSequence().associateWith { key -> obj.optInt(key) } } ?: emptyMap(), sharing = x.getBoolean("sharing"), audioAvailable = available, audioManifestKnown = x.has("audioAvailable"), mediaProtocol = x.optInt("mediaProtocol", 1), repeat = x.getString("repeat"), message = if (!wasConnected) "Session connected. Matching clocks…" else it.message) }
                 if (!wasConnected && "convoy_ptt_pcm16_v1" !in advertised) {
                     message("Connected to an older server: intercom, GPS, voting and guest songs need the v1.7 backend.")
                 }
@@ -763,7 +771,7 @@ class SyncCoordinator(private val context: Context, val dao: LibraryDao, prefere
         )
         prefs.edit().remove("token").remove("code").remove("role").remove("memberId")
             .putString("endpoint", nextEndpoint).apply()
-        update { it.copy(endpoint = nextEndpoint, code = "", role = "", memberId = "", radarEnabled = false, speakerId = null, serverFeatures = emptySet(), guestAdditions = false, pendingGuestSong = "", pendingGuestSongs = emptyList(), connected = false, queue = emptyList(), cars = emptyList(), clockReady = false, driftMs = null, requestedPlaying = false, audioError = "", message = if (clearMessage) "Session left. The host can create a new session for the group." else it.message) }
+        update { it.copy(endpoint = nextEndpoint, code = "", role = "", memberId = "", radarEnabled = false, speakerId = null, serverFeatures = emptySet(), radioStatus = "Waiting for a radio connection", guestAdditions = false, pendingGuestSong = "", pendingGuestSongs = emptyList(), connected = false, queue = emptyList(), cars = emptyList(), clockReady = false, driftMs = null, requestedPlaying = false, audioError = "", message = if (clearMessage) "Session left. The host can create a new session for the group." else it.message) }
     }
     fun endSession() { scope.launch { try { withContext(Dispatchers.IO) { request("/sessions/${state.value.code}", "DELETE") }; leave() } catch (e: Exception) { message(e.message ?: "Could not end session") } } }
 }
