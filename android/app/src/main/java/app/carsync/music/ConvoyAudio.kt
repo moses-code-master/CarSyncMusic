@@ -52,6 +52,8 @@ class ConvoyAudio(
     fun beginVoiceSession() {
         bluetoothRoute.begin(preferBluetoothRadio)
     }
+
+    fun endCallRoute() { bluetoothRoute.release() }
     private val rate = 16000
     private val pcmBytes = ConvoyVoiceCodec.PCM_BYTES
     private val queue = ArrayBlockingQueue<ByteArray>(18)
