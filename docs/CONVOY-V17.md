@@ -69,3 +69,12 @@ Starting with `1.7.0-beta.3`, **no manual server entry is required**. The beta A
 Custom and explicitly saved URLs are preserved. To override the default, use Settings → Server and Save. For older installations without an explicit-override marker, a saved URL identical to the original stock default is treated as the old default. New tests verify migration and override behavior.
 
 The stable v1.6.0 build on `main` and existing production Render service remain unchanged. This beta endpoint is a free, nonproduction staging service; its uploaded media and session records may be lost on restart and its startup may be delayed. Two phones must use **the same endpoint and a new session code**.
+
+
+## Beta 4 — Talk & Listen and batch guest media
+
+The dedicated **CAR-TO-CAR INTERCOM** appears on Home and Now Playing even with an empty music queue. Listening is automatic when connected; both host and guests may request the microphone. The app handles JSON `null` speaker IDs correctly, so an idle channel no longer becomes a stuck text `"null"` speaker. Stop talking releases the button immediately. Microphone capture retries using the standard MIC source when the voice-communication source is unavailable and reports recording failures.
+
+Guests may select several MP3s in Music Library or multiple MP4 videos on the Videos page and submit them sequentially. The host must enable sharing and guest contributions. Accepted files must be at most **100 MB each**, with no more than **500 session playlist entries**, an overall **2 GB relay storage budget** and a per-guest submission rate limit; therefore uploads are **not literally unlimited**. The server verifies SHA-256 content and only appends each item after successful upload. Only `video/mp4` is supported for remote video streaming. MKV and WebM remain local-only. Playback on a screen requires parked confirmation and respects driving restrictions; audio may continue where supported.
+
+The beta app and companion test backend must both be updated to this feature branch. The existing stable backend and Android release remain untouched. Because the staging server is on Render's free plan and has no persistent volume, uploaded media and sessions may be lost on a restart or redeploy. Actual head-unit microphone/speaker behavior still requires a two-phone or two-head-unit test; green CI alone does not guarantee functional in-car PTT.
