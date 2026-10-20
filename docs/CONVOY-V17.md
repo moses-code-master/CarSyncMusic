@@ -112,3 +112,16 @@ The **Home** screen is now a working version of the supplied CarSync Convoy mock
 Intercom button labels now follow the real floor state: Start/Stop/Cancel/Listening. Host and guest operate on the same authenticated voice floor. Microphone permission must be granted before transmitting; receiving requires no push-to-talk action. A large on-screen button is not a substitute for hands-free controls; do not use it while driving.
 
 This version is based on the previous passing v1.8.0-beta.1 development branch. **New CI checks are required** before phone testing. Keep production unchanged and keep this branch in draft until emulator testing and physical two-device verification pass.
+
+
+## v1.8.0-beta.3 — full convoy member roster and distance comparison
+
+The Live Map now displays a visible, labeled map marker for **every online member with a fresh, accurate, voluntarily shared GPS position**, rather than showing unlabeled pins. The view auto-fits all sharing cars when the set changes, while preserving a passenger's manual pan/zoom during ordinary location updates. A manual **Fit all cars** control resets the view.
+
+**Every registered convoy member** appears in a list below the map, including offline members and members without usable GPS. These entries show "Offline," "Location not shared or unavailable," or "GPS stale or inaccurate" instead of fabricating coordinates. Each car with an acceptable GPS fix shows its coordinates, accuracy, age, and straight-line separation from the selected reference car. **Tap another live car** (map label or roster entry) to recalculate distance from it to all other sharing cars. With 15 or fewer located cars, thin lines illustrate these straight-line separations; they are **not road routes or driving times**.
+
+The server already sends the GPS timestamp `location.at` and a corresponding `serverNow`. Android now accounts for the age of the fix using those server timestamps, instead of resetting the age to zero on every broadcast. The location provider now requests fixes every four seconds with zero minimum movement distance, because the previous five-meter movement threshold made stationary cars disappear when their server location timed out. Turning off GPS sharing or disabling the provider revokes shared location data immediately.
+
+Privacy: **no app can show the current location of a participant who has not opted into GPS sharing or whose GPS fix is unavailable**. Never advertise unavailable locations as tracked. Public OpenStreetMap tiles still require external internet tile requests, and the beta service is not yet approved for production convoy workloads. Location accuracy threshold is 250 meters and client location freshness threshold is 15 seconds; the backend removes positions after 10 seconds. No public API for historical route tracking or offline tracking has been added.
+
+Acceptance: enable consented GPS on two separate phones and verify both map markers and the real distance label; tap each car to compare separations; test a stopped car for at least a minute; revoke one device's GPS and verify its marker disappears but its roster entry remains; disable cellular data and verify stale location disappears; test three or more cars to confirm Fit all cars includes every usable fix.
