@@ -19,7 +19,7 @@ data class RemoteTrack(val hash: String, val title: String, val artist: String, 
 data class Car(val name: String, val role: String, val online: Boolean, val driftMs: Long?, val rttMs: Long?, val buffered: Boolean, val missing: Boolean)
 data class AppState(
     val endpoint: String = "https://carsync-music.onrender.com", val carName: String = "My car", val code: String = "", val role: String = "", val connected: Boolean = false,
-    val library: List<Track> = emptyList(), val playlists: List<SavedPlaylist> = emptyList(), val queue: List<RemoteTrack> = emptyList(), val cars: List<Car> = emptyList(), val maxGuests: Int = 10, val speakerId: String? = null, val votes: Map<String, Int> = emptyMap(), val radarEnabled: Boolean = false, val discoveredServer: String = "",
+    val library: List<Track> = emptyList(), val playlists: List<SavedPlaylist> = emptyList(), val queue: List<RemoteTrack> = emptyList(), val cars: List<Car> = emptyList(), val maxGuests: Int = 10, val speakerId: String? = null, val memberId: String = "", val votes: Map<String, Int> = emptyMap(), val radarEnabled: Boolean = false, val discoveredServer: String = "",
     val index: Int = 0, val positionMs: Long = 0, val playing: Boolean = false, val buffering: Boolean = false, val missing: Boolean = false,
     val clockReady: Boolean = false, val driftMs: Long? = null, val rttMs: Long = 0, val volume: Float = 0.8f,
     val guestControls: Boolean = false, val sharing: Boolean = false, val audioAvailable: Set<String> = emptySet(), val audioManifestKnown: Boolean = false, val repeat: String = "off", val driving: Boolean = false,
@@ -36,7 +36,7 @@ class SyncCoordinator(private val context: Context, val dao: LibraryDao, prefere
     private val prefs = context.getSharedPreferences(preferencesName, Context.MODE_PRIVATE)
     private val scope = CoroutineScope(SupervisorJob() + Dispatchers.Main.immediate)
     val http = OkHttpClient.Builder().connectTimeout(10, java.util.concurrent.TimeUnit.SECONDS).readTimeout(30, java.util.concurrent.TimeUnit.SECONDS).pingInterval(10, java.util.concurrent.TimeUnit.SECONDS).build()
-    private val mutable = MutableStateFlow(AppState(endpoint = prefs.getString("endpoint", "https://carsync-music.onrender.com")!!.ifBlank { "https://carsync-music.onrender.com" }, carName = prefs.getString("name", "My car")!!, code = prefs.getString("code", "")!!, role = prefs.getString("role", "")!!, latencyMs = prefs.getLong("latency", 0), driving = prefs.getBoolean("driving", false)))
+    private val mutable = MutableStateFlow(AppState(endpoint = prefs.getString("endpoint", "https://carsync-music.onrender.com")!!.ifBlank { "https://carsync-music.onrender.com" }, carName = prefs.getString("name", "My car")!!, code = prefs.getString("code", "")!!, role = prefs.getString("role", "")!!, memberId = prefs.getString("memberId", "")!!, latencyMs = prefs.getLong("latency", 0), driving = prefs.getBoolean("driving", false)))
     val state: StateFlow<AppState> = mutable.asStateFlow()
     private var bearer = prefs.getString("token", "")!!
     private var ws: WebSocket? = null
@@ -59,8 +59,8 @@ class SyncCoordinator(private val context: Context, val dao: LibraryDao, prefere
     fun toggleRadar(enabled: Boolean) {
         if (enabled && !radar.start()) message("Grant location permission to share convoy position.")
         else if (!enabled) radar.stop()
-        update { it.copy(radarEnabled = enabled && context.checkSelfPermission(android.Manifest.permission.ACCESS_COARSE_LOCATION) == android.content.pm.PackageManager.PERMISSION_GRANTED ||
-            enabled && context.checkSelfPermission(android.Manifest.permission.ACCESS_FINE_LOCATION) == android.content.pm.PackageManager.PERMISSION_GRANTED) }
+        update { it.copy(radarEnabled = enabled && (context.checkSelfPermission(android.Manifest.permission.ACCESS_COARSE_LOCATION) == android.content.pm.PackageManager.PERMISSION_GRANTED ||
+            context.checkSelfPermission(android.Manifest.permission.ACCESS_FINE_LOCATION) == android.content.pm.PackageManager.PERMISSION_GRANTED)) }
     }
     fun pttRequest() { if (state.value.connected) ws?.send(JSONObject().put("type", "ptt_request").toString()) }
     fun pttRelease() { convoyAudio.stopCapture(); ws?.send(JSONObject().put("type", "ptt_release").toString()) }
@@ -145,8 +145,8 @@ class SyncCoordinator(private val context: Context, val dao: LibraryDao, prefere
                 val path = if (code == null) "/sessions" else "/sessions/$code/join"
                 val result = withContext(Dispatchers.IO) { request(path, "POST", JSONObject().put("name", state.value.carName)) }
                 bearer = result.getString("token")
-                prefs.edit().putString("token", bearer).putString("code", result.getString("code")).putString("role", result.getString("role")).apply()
-                update { it.copy(code = result.getString("code"), role = result.getString("role"), message = "Connecting session…") }; connect()
+                prefs.edit().putString("token", bearer).putString("code", result.getString("code")).putString("role", result.getString("role")).putString("memberId", result.getString("memberId")).apply()
+                update { it.copy(code = result.getString("code"), role = result.getString("role"), memberId = result.getString("memberId"), message = "Connecting session…") }; connect()
             } catch (e: Exception) { message(e.message ?: "Cannot reach server") }
             finally { update { it.copy(busy = false) } }
         }
@@ -185,7 +185,7 @@ class SyncCoordinator(private val context: Context, val dao: LibraryDao, prefere
                 update { it.copy(speakerId = x.optString("speakerId")) }
                 convoyAudio.duck(true)
                 // Capture only after the server explicitly grants the speaking floor.
-                if (x.optString("name") == state.value.carName && !convoyAudio.beginCapture()) {
+                if (x.optString("speakerId") == state.value.memberId && !convoyAudio.beginCapture()) {
                     ws?.send(JSONObject().put("type", "ptt_release").toString())
                     message("Microphone unavailable. Grant microphone permission before speaking.")
                 }
@@ -456,7 +456,7 @@ class SyncCoordinator(private val context: Context, val dao: LibraryDao, prefere
     fun resume() { if (bearer.isNotBlank() && !state.value.connected) connect() }
     fun leave(clearMessage: Boolean = true) { convoyAudio.close(); radar.stop();
         generation++; reconnect?.cancel(); ws?.close(1000, "Left session"); ws = null; scheduleJob?.cancel(); player?.pause(); player?.clearMediaItems(); preparedHash = ""; desired = null; activeRevision = -1; bearer = ""
-        prefs.edit().remove("token").remove("code").remove("role").apply()
+        prefs.edit().remove("token").remove("code").remove("role").remove("memberId").apply()
         update { it.copy(code = "", role = "", connected = false, queue = emptyList(), cars = emptyList(), clockReady = false, driftMs = null, requestedPlaying = false, audioError = "", message = if (clearMessage) "Session left. The host can create a new session for the group." else it.message) }
     }
     fun endSession() { scope.launch { try { withContext(Dispatchers.IO) { request("/sessions/${state.value.code}", "DELETE") }; leave() } catch (e: Exception) { message(e.message ?: "Could not end session") } } }
