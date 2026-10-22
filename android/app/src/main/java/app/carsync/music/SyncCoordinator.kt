@@ -341,6 +341,7 @@ class SyncCoordinator(private val context: Context, val dao: LibraryDao, prefere
     private var playPublishedHash: String? = null
     private var lastStatus = 0L
     private val continuity = PlaybackContinuityGuard()
+    private var lastVideoSyncSeekMs = -30_000L
     private var hasPlayedCurrentTrack = false
     private val pings = mutableSetOf<Double>()
     private fun localNow() = SystemClock.elapsedRealtime().toDouble()
@@ -626,6 +627,20 @@ class SyncCoordinator(private val context: Context, val dao: LibraryDao, prefere
             val target = f.target(serverNow(), state.value.latencyMs).coerceAtMost(state.value.queue.getOrNull(f.index)?.durationMs ?: Long.MAX_VALUE)
             error = target - p.currentPosition
             if (f.playing && p.isPlaying) {
+                // Keep video frames aligned promptly; only music uses gentle
+                // continuity correction to avoid speaker clicks and scratches.
+                if (state.value.track?.mediaType == "video") {
+                    val nowMs = SystemClock.elapsedRealtime()
+                    if (abs(error) > 300 && nowMs - lastVideoSyncSeekMs > 1500) {
+                        p.seekTo(target)
+                        lastVideoSyncSeekMs = nowMs
+                        if (p.playbackParameters.speed != 1f) p.playbackParameters = PlaybackParameters(1f)
+                    } else {
+                        val targetSpeed = if (abs(error) > 35) driftSpeed(error) else 1f
+                        if (abs(p.playbackParameters.speed - targetSpeed) > 0.0005f)
+                            p.playbackParameters = PlaybackParameters(targetSpeed)
+                    }
+                } else {
                 val decision = continuity.next(error, SystemClock.elapsedRealtime(), state.value.speakerId != null)
                 if (decision.hardSeek) {
                     p.seekTo(target)
@@ -636,6 +651,7 @@ class SyncCoordinator(private val context: Context, val dao: LibraryDao, prefere
                     p.playbackParameters = PlaybackParameters(decision.speed)
                     update { it.copy(syncCorrectionStatus = if (decision.speed == 1f) "Steady" else
                         "Gentle synchronization correction") }
+                }
                 }
             }
         }
