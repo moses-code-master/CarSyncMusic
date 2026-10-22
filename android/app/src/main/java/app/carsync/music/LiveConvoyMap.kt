@@ -51,6 +51,7 @@ fun LiveConvoyMap(
 ) {
     val context = LocalContext.current
     var referenceChoice by remember(state.code) { mutableStateOf<String?>(null) }
+    var followAll by remember(state.code) { mutableStateOf(true) }
     val now by produceState(System.currentTimeMillis(), state.code) {
         while (true) {
             value = System.currentTimeMillis()
@@ -118,6 +119,7 @@ fun LiveConvoyMap(
                 }
             }
             val fittedIds = remember(map) { mutableSetOf<String>() }
+            val lastAutoFitMs = remember(map) { longArrayOf(0L) }
             AndroidView(
                 factory = { map },
                 modifier = Modifier.fillMaxWidth().height(330.dp),
@@ -160,9 +162,10 @@ fun LiveConvoyMap(
                         view.overlays.add(marker)
                     }
                     val visibleIds = located.map { it.car.memberId }.toSet()
-                    if (visibleIds != fittedIds) {
+                    if (visibleIds != fittedIds || (followAll && now - lastAutoFitMs[0] >= 8000L)) {
                         fittedIds.clear()
                         fittedIds.addAll(visibleIds)
+                        lastAutoFitMs[0] = now
                         fitAllCars(view, located)
                     }
                     view.invalidate()
@@ -174,6 +177,9 @@ fun LiveConvoyMap(
             }
             Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
                 OutlinedButton(onClick = { fitAllCars(map, located) }) { Text("Fit all cars") }
+                OutlinedButton(onClick = { followAll = !followAll }) {
+                    Text(if (followAll) "Follow: ON" else "Follow: OFF")
+                }
                 OutlinedButton(onClick = {
                     val target = reference?.usableLocation
                     if (target != null)
