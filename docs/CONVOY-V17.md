@@ -187,3 +187,17 @@ Changes:
 - Unit tests cover transient jitter, sustained severe drift, slow gentle adjustment, announcements, and reset behavior.
 
 Limitations: Without device recordings and a comparison between local MP3 playback and streamed convoy audio, we cannot know whether observed scratches come from output-route switching, Bluetooth codec quality, damaged MP3 source, network rebuffering, or timing seeks. Test the same file locally and remotely on a parked phone at safe listening volume. Verify a song plays for five minutes without new rebuffer events or large sync recoveries. A change in network quality or external audio hardware may require additional tuning. Nothing has been deployed to production.
+
+
+## v1.9.0-beta.6 — Live Map reliability and connection diagnosis
+
+The prior Live Map could show no vehicles, stale status or disappearing car pins even with a connected convoy. Confirmed code issues: Android subscribed only to satellite GPS if enabled and could ignore valid network-provider locations; it did not restart voluntary sharing after a temporary WebSocket reconnection; the server expired positions after 10 seconds while phone GPS providers could deliver fixes more slowly.
+
+Changes:
+- Opt-in Android location now subscribes to both available permitted providers (GPS and network). A fresh, accurate last-known fix can seed the display immediately; old cached fixes or positions with accuracy above 250 m are never used. Location permissions and explicit user opt-in remain mandatory.
+- The server now retains *the latest voluntarily shared location* for up to 30 seconds, not 10, to bridge temporary provider delays. The map accepts server timestamps up to 35 seconds and always drops expired/unshared/offline coordinates. The server sends immediate revocation when a participant disables sharing.
+- An opt-in GPS session resumes after a temporary internet drop when the same active session reconnects, provided Android permits restarting the foreground location service. Sharing stops if the user turns it off, leaves, loses location permission or the original session expires. No historical tracking or inferred coordinates are added.
+- Live Map now distinguishes **Sharing OFF** from **Sharing ON but waiting for a good GPS fix** and explains that blank map tiles require network access. Each car still appears in the roster, even when it does not consent or a recent fix is unavailable. Distances remain straight-line estimates from real consented fixes, not street routes.
+- The beta points to a **separate Render test backend** at https://carsync-music-map-test.onrender.com. Existing configured endpoints and active sessions do not change automatically. After leaving a session, previous uncustomized test defaults move to the matching map server. The main production backend is unchanged.
+
+Release verification: complete Android builds/unit tests, backend tests for 30-second TTL boundaries and immediate opt-out, and emulator matrix. Test with two phones with GPS on and explicit app location permission; put one phone indoors or briefly disable data, wait for resumption; test manual stop-sharing privacy and no stale map markers. The application still cannot locate nonconsenting members or show reliable road-driving distance without a routing service. Third-party OpenStreetMap public map tiles can be temporarily blocked or unavailable.
