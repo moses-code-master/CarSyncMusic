@@ -86,6 +86,7 @@ class SyncCoordinator(private val context: Context, val dao: LibraryDao, prefere
         convoyAudio.configureBluetoothRadio(enabled)
     }
 
+    private var locationConsentForCurrentSession = false
     private var recentMovingAtMs = -100000L
     private val radar = ConvoyRadar(context) { loc ->
         if (loc != null && loc.hasSpeed() && loc.speed > 5f / 3.6f && loc.accuracy < 30f) {
@@ -129,6 +130,7 @@ class SyncCoordinator(private val context: Context, val dao: LibraryDao, prefere
         if (enabled && !state.value.supportsRadar) { message("Convoy radar needs the updated session server."); return }
         if (enabled && !state.value.connected) { message("Join a session before sharing your location."); return }
         if (!enabled) {
+            locationConsentForCurrentSession = false
             radar.stop()
             ConvoyForeground.stopLocation(context)
             update { it.copy(radarEnabled = false) }
@@ -139,6 +141,7 @@ class SyncCoordinator(private val context: Context, val dao: LibraryDao, prefere
             ConvoyForeground.stopLocation(context)
             message("Location cannot start. Allow location access while CarSync is open.")
         }
+        if (started) locationConsentForCurrentSession = true
         update { it.copy(radarEnabled = started) }
     }
     private var talkGrantTimeout: Job? = null
@@ -338,6 +341,7 @@ class SyncCoordinator(private val context: Context, val dao: LibraryDao, prefere
     private var playPublishedHash: String? = null
     private var lastStatus = 0L
     private val continuity = PlaybackContinuityGuard()
+    private var lastVideoSyncSeekMs = -30_000L
     private var hasPlayedCurrentTrack = false
     private val pings = mutableSetOf<Double>()
     private fun localNow() = SystemClock.elapsedRealtime().toDouble()
@@ -446,6 +450,9 @@ class SyncCoordinator(private val context: Context, val dao: LibraryDao, prefere
     private fun lost() {
         clearTalkRequest()
         convoyAudio.close()
+        // Consent lasts only for this existing session; resume after a short
+        // internet dropout, but never after leaving or explicitly opting out.
+        locationConsentForCurrentSession = locationConsentForCurrentSession || state.value.radarEnabled
         radar.stop()
         ConvoyForeground.stopMicrophone(context)
         ConvoyForeground.stopLocation(context)
@@ -463,7 +470,7 @@ class SyncCoordinator(private val context: Context, val dao: LibraryDao, prefere
             // server's own fix timestamp and serverNow, then mapped to local time.
             val ageMs = if (serverNowMs != null && serverNowMs.isFinite()) {
                 (serverNowMs - it.optDouble("at", serverNowMs))
-                    .toLong().coerceIn(0L, 30000L)
+                    .toLong().coerceIn(0L, 40000L)
             } else 0L
             ConvoyPosition(
                 it.optDouble("lat"), it.optDouble("lon"), it.optDouble("speed"),
@@ -533,6 +540,10 @@ class SyncCoordinator(private val context: Context, val dao: LibraryDao, prefere
                 val audioChanged = state.value.audioAvailable != available || state.value.sharing != x.getBoolean("sharing")
                 update { it.copy(connected = true, reconnectAttempt = 0, queue = queue, cars = cars, maxGuests = x.optInt("maxGuests", 1).coerceIn(1, 50), guestControls = x.getBoolean("guestControls"), guestAdditions = x.optBoolean("guestAdditions", false), serverFeatures = advertised,
                     radioStatus = if ("convoy_ptt_mulaw_v1" in advertised) "Compact radio · G.711 16 kHz (half-size voice frames)" else "Compatible radio · PCM16 (uncompressed)", speakerId = if (x.isNull("speakerId")) null else x.optString("speakerId").takeIf { name -> name.isNotBlank() && name != "null" }, votes = x.optJSONObject("votes")?.let { obj -> obj.keys().asSequence().associateWith { key -> obj.optInt(key) } } ?: emptyMap(), sharing = x.getBoolean("sharing"), audioAvailable = available, audioManifestKnown = x.has("audioAvailable"), mediaProtocol = x.optInt("mediaProtocol", 1), repeat = x.getString("repeat"), message = if (!wasConnected) "Session connected. Matching clocks…" else it.message) }
+                if (!wasConnected && locationConsentForCurrentSession &&
+                    "convoy_location_v1" in advertised && !state.value.radarEnabled) {
+                    toggleRadar(true)
+                }
                 if (!wasConnected && "convoy_ptt_pcm16_v1" !in advertised) {
                     message("Connected to an older server: intercom, GPS, voting and guest songs need the v1.7 backend.")
                 }
@@ -616,6 +627,20 @@ class SyncCoordinator(private val context: Context, val dao: LibraryDao, prefere
             val target = f.target(serverNow(), state.value.latencyMs).coerceAtMost(state.value.queue.getOrNull(f.index)?.durationMs ?: Long.MAX_VALUE)
             error = target - p.currentPosition
             if (f.playing && p.isPlaying) {
+                // Keep video frames aligned promptly; only music uses gentle
+                // continuity correction to avoid speaker clicks and scratches.
+                if (state.value.track?.mediaType == "video") {
+                    val nowMs = SystemClock.elapsedRealtime()
+                    if (abs(error) > 300 && nowMs - lastVideoSyncSeekMs > 1500) {
+                        p.seekTo(target)
+                        lastVideoSyncSeekMs = nowMs
+                        if (p.playbackParameters.speed != 1f) p.playbackParameters = PlaybackParameters(1f)
+                    } else {
+                        val targetSpeed = if (abs(error) > 35) driftSpeed(error) else 1f
+                        if (abs(p.playbackParameters.speed - targetSpeed) > 0.0005f)
+                            p.playbackParameters = PlaybackParameters(targetSpeed)
+                    }
+                } else {
                 val decision = continuity.next(error, SystemClock.elapsedRealtime(), state.value.speakerId != null)
                 if (decision.hardSeek) {
                     p.seekTo(target)
@@ -626,6 +651,7 @@ class SyncCoordinator(private val context: Context, val dao: LibraryDao, prefere
                     p.playbackParameters = PlaybackParameters(decision.speed)
                     update { it.copy(syncCorrectionStatus = if (decision.speed == 1f) "Steady" else
                         "Gentle synchronization correction") }
+                }
                 }
             }
         }
@@ -814,7 +840,7 @@ class SyncCoordinator(private val context: Context, val dao: LibraryDao, prefere
     }
     fun audioToken() = bearer
     fun resume() { if (bearer.isNotBlank() && !state.value.connected) connect() }
-    fun leave(clearMessage: Boolean = true) { convoyAudio.close(); radar.stop(); ConvoyForeground.stopLocation(context); ConvoyForeground.stopMicrophone(context);
+    fun leave(clearMessage: Boolean = true) { locationConsentForCurrentSession = false; convoyAudio.close(); radar.stop(); ConvoyForeground.stopLocation(context); ConvoyForeground.stopMicrophone(context);
         generation++; reconnect?.cancel(); ws?.close(1000, "Left session"); ws = null; scheduleJob?.cancel(); player?.pause(); player?.clearMediaItems(); preparedHash = ""; desired = null; activeRevision = -1; bearer = ""
         val nextEndpoint = ServerDefaults.resolve(
             state.value.endpoint, prefs.getBoolean("manualServer", false), false

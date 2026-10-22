@@ -51,6 +51,7 @@ fun LiveConvoyMap(
 ) {
     val context = LocalContext.current
     var referenceChoice by remember(state.code) { mutableStateOf<String?>(null) }
+    var followAll by remember(state.code) { mutableStateOf(true) }
     val now by produceState(System.currentTimeMillis(), state.code) {
         while (true) {
             value = System.currentTimeMillis()
@@ -86,8 +87,18 @@ fun LiveConvoyMap(
                     ContextCompat.checkSelfPermission(context, Manifest.permission.ACCESS_COARSE_LOCATION) == PackageManager.PERMISSION_GRANTED
                 if (granted) sync.toggleRadar(true) else requestLocation()
             }) { Text("Share my position with the convoy") }
+            Text("GPS sharing is OFF on this phone. Enable it on each car whose location you want to display.",
+                color = MapWarning, fontSize = 12.sp)
         } else {
             OutlinedButton(onClick = { sync.toggleRadar(false) }) { Text("Stop sharing my location") }
+            val ownCar = snapshot.cars.firstOrNull { it.car.memberId == state.memberId }
+            if (ownCar?.usableLocation == null) {
+                Text("GPS sharing is ON, but no accurate recent position is available. Check device Location settings, allow precise location, or move to a clear view of the sky. An Android head unit without GPS may need a paired phone with location capability.",
+                    color = MapWarning, fontSize = 12.sp)
+            } else {
+                Text("Your position is visible to this convoy · GPS updated ${((now - ownCar.usableLocation.receivedAtMs).coerceAtLeast(0L) / 1000L)} seconds ago.",
+                    color = MapAccent, fontSize = 12.sp)
+            }
         }
 
         if (state.driving || state.vehicleRestricted) {
@@ -96,7 +107,7 @@ fun LiveConvoyMap(
         }
 
         if (located.isEmpty()) {
-            Text("No fresh shared GPS positions yet. Each participant must enable location sharing and wait for a GPS fix.",
+            Text("No shared GPS positions are available yet. Connected cars appear in the roster below, but map pins require a recent accurate fix from each participant.",
                 color = MapWarning)
         } else {
             val map = remember(context, state.code) {
@@ -108,6 +119,7 @@ fun LiveConvoyMap(
                 }
             }
             val fittedIds = remember(map) { mutableSetOf<String>() }
+            val lastAutoFitMs = remember(map) { longArrayOf(0L) }
             AndroidView(
                 factory = { map },
                 modifier = Modifier.fillMaxWidth().height(330.dp),
@@ -150,9 +162,10 @@ fun LiveConvoyMap(
                         view.overlays.add(marker)
                     }
                     val visibleIds = located.map { it.car.memberId }.toSet()
-                    if (visibleIds != fittedIds) {
+                    if (visibleIds != fittedIds || (followAll && now - lastAutoFitMs[0] >= 8000L)) {
                         fittedIds.clear()
                         fittedIds.addAll(visibleIds)
+                        lastAutoFitMs[0] = now
                         fitAllCars(view, located)
                     }
                     view.invalidate()
@@ -164,13 +177,16 @@ fun LiveConvoyMap(
             }
             Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
                 OutlinedButton(onClick = { fitAllCars(map, located) }) { Text("Fit all cars") }
+                OutlinedButton(onClick = { followAll = !followAll }) {
+                    Text(if (followAll) "Follow: ON" else "Follow: OFF")
+                }
                 OutlinedButton(onClick = {
                     val target = reference?.usableLocation
                     if (target != null)
                         map.controller.animateTo(GeoPoint(target.latitude, target.longitude))
                 }, enabled = reference != null) { Text("Center selected") }
             }
-            Text("Map © OpenStreetMap contributors. Pins update with GPS fixes. Lines and distances are straight-line estimates, not road routes.",
+            Text("Map © OpenStreetMap contributors. Map tiles need internet access. If pins appear over a blank background, check internet and tile-server access. Distances are straight-line estimates, not driving routes.",
                 color = MapMuted, fontSize = 11.sp)
         }
 
