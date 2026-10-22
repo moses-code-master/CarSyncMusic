@@ -12,7 +12,7 @@ class ConnectionDefaultsTest {
     @Test fun convoyUsesAnInternetServerWithoutBluetoothConfiguration() {
         val server = ServerDefaults.resolve(null, manuallyConfigured = false, hasActiveSession = false)
         assertTrue(server.startsWith("https://"))
-        assertEquals(ServerDefaults.RADIO_URL, server)
+        assertEquals(ServerDefaults.MAP_URL, server)
         assertFalse(AppState(endpoint = server).preferBluetoothRadio)
     }
 
