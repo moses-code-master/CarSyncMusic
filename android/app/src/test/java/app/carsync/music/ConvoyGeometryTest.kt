@@ -25,7 +25,7 @@ class ConvoyGeometryTest {
     }
 
     @Test fun ignoresStaleOrUnreliableCoordinates() {
-        assertNull(ConvoyGeometry.separationMeters(at(-1.28,36.8,1),at(-1.28,36.83),20000))
+        assertNull(ConvoyGeometry.separationMeters(at(-1.28,36.8,1),at(-1.28,36.83),50000))
         assertNull(ConvoyGeometry.separationMeters(at(-1.28,36.8,20000,500.0),at(-1.28,36.83),20000))
     }
 }
