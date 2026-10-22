@@ -16,6 +16,14 @@ class ConvoyGeometryTest {
         assertTrue(d > 2500)
         assertTrue(ConvoyGeometry.alert(d))
     }
+    @Test fun retainsRecentlySharedGpsButExpiresLostCar() {
+        val point = at(-1.28, 36.8, 1000)
+        assertTrue(point.usable(30999))
+        assertTrue(point.usable(35999))
+        assertFalse(point.usable(36000))
+        assertFalse(point.usable(900))
+    }
+
     @Test fun ignoresStaleOrUnreliableCoordinates() {
         assertNull(ConvoyGeometry.separationMeters(at(-1.28,36.8,1),at(-1.28,36.83),20000))
         assertNull(ConvoyGeometry.separationMeters(at(-1.28,36.8,20000,500.0),at(-1.28,36.83),20000))
