@@ -1,5 +1,6 @@
 import http from 'node:http';
 import { encodeMulaw, decodeMulaw } from './voice-codec.mjs';
+import { recentLocation } from './location-policy.mjs';
 import { WebSocketServer, WebSocket } from 'ws';
 import { DatabaseSync } from 'node:sqlite';
 import { mkdirSync, existsSync, statSync, createReadStream, createWriteStream, unlinkSync, renameSync, readdirSync } from 'node:fs';
@@ -69,7 +70,7 @@ export function createServer({ dataDir = process.env.DATA_DIR || './data', port 
     const peer = peers.get(m.id);
     // Mobile radios and satellite fixes can arrive several seconds apart.
     // Display only recent consented positions; drop entirely after 30 seconds.
-    const livePosition = peer?.location && now() - peer.location.at < 30000 ? peer.location : null;
+    const livePosition = recentLocation(peer?.location, now());
     return { id: m.id, name: m.name, role: m.role, online: !!peer, ...(peer?.status || {}), ...(livePosition ? { location: livePosition } : {}) };
   });
   function snapshot(s) {
