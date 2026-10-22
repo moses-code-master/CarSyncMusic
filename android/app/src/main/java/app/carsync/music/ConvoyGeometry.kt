@@ -12,7 +12,7 @@ data class ConvoyPosition(
     val receivedAtMs: Long
 ) {
     fun usable(nowMs: Long) = latitude in -90.0..90.0 && longitude in -180.0..180.0 &&
-        accuracyMeters in 0.0..250.0 && nowMs >= receivedAtMs && nowMs - receivedAtMs < 15000L
+        accuracyMeters in 0.0..250.0 && nowMs >= receivedAtMs && nowMs - receivedAtMs < 35000L
 }
 
 object ConvoyGeometry {
