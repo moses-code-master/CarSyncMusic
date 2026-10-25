@@ -21,7 +21,7 @@ data class Car(
     val memberId: String = "", val location: ConvoyPosition? = null
 )
 data class AppState(
-    val endpoint: String = ServerDefaults.CONVOY_URL, val carName: String = "My car", val code: String = "", val role: String = "", val connected: Boolean = false,
+    val endpoint: String = ServerDefaults.LEGACY_URL, val carName: String = "My car", val code: String = "", val role: String = "", val connected: Boolean = false,
     val library: List<Track> = emptyList(), val playlists: List<SavedPlaylist> = emptyList(), val queue: List<RemoteTrack> = emptyList(), val cars: List<Car> = emptyList(), val maxGuests: Int = 10, val speakerId: String? = null, val memberId: String = "", val votes: Map<String, Int> = emptyMap(), val radarEnabled: Boolean = false, val discoveredServer: String = "", val localSearchActive: Boolean = false, val localSearchStatus: String = "", val reconnectAttempt: Int = 0, val talkPending: Boolean = false,
     val index: Int = 0, val positionMs: Long = 0, val playing: Boolean = false, val buffering: Boolean = false, val missing: Boolean = false,
     val clockReady: Boolean = false, val driftMs: Long? = null, val rttMs: Long = 0, val volume: Float = 0.8f,
