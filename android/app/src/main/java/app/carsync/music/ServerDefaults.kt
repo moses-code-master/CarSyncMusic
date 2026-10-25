@@ -3,7 +3,7 @@ package app.carsync.music
 import okhttp3.HttpUrl.Companion.toHttpUrlOrNull
 
 /**
- * Beta APK defaults to its matching convoy backend.
+ * Stable builds use the production convoy backend by default.
  * Explicitly configured endpoints remain untouched, as do endpoints of active sessions.
  */
 object ServerDefaults {
@@ -35,6 +35,6 @@ object ServerDefaults {
         val value = saved?.trim()?.trimEnd('/').orEmpty()
         if (hasActiveSession) return value.ifBlank { LEGACY_URL }
         if (manuallyConfigured && value.isNotBlank()) return value
-        return if (value.isBlank() || value == LEGACY_URL || value == CONVOY_URL || value == RADIO_URL) MAP_URL else value
+        return if (value.isBlank() || value in setOf(LEGACY_URL, CONVOY_URL, RADIO_URL, MAP_URL)) LEGACY_URL else value
     }
 }
