@@ -42,6 +42,7 @@ test('location sharing revokes immediately even after rate limiting', async t =>
   assert.equal(revoked.cars.find(c=>c.id===host.memberId).location,undefined);
   assert.equal(revoked.cars.find(c=>c.id===guest.memberId).location.lat,-1.30,
     'Opting out on the host must not erase a separate guest location');
+  first.messages.length=0;
   second.ws.send(JSON.stringify({type:'location',enabled:false}));
   const guestRevoked=await wait(first,x=>x.type==='cars'&&!x.cars.find(c=>c.id===guest.memberId)?.location);
   assert.equal(guestRevoked.cars.find(c=>c.id===guest.memberId).location,undefined);
