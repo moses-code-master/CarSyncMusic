@@ -78,3 +78,126 @@ The dedicated **CAR-TO-CAR INTERCOM** appears on Home and Now Playing even with 
 Guests may select several MP3s in Music Library or multiple MP4 videos on the Videos page and submit them sequentially. The host must enable sharing and guest contributions. Accepted files must be at most **100 MB each**, with no more than **500 session playlist entries**, an overall **2 GB relay storage budget** and a per-guest submission rate limit; therefore uploads are **not literally unlimited**. The server verifies SHA-256 content and only appends each item after successful upload. Only `video/mp4` is supported for remote video streaming. MKV and WebM remain local-only. Playback on a screen requires parked confirmation and respects driving restrictions; audio may continue where supported.
 
 The beta app and companion test backend must both be updated to this feature branch. The existing stable backend and Android release remain untouched. Because the staging server is on Render's free plan and has no persistent volume, uploaded media and sessions may be lost on a restart or redeploy. Actual head-unit microphone/speaker behavior still requires a two-phone or two-head-unit test; green CI alone does not guarantee functional in-car PTT.
+
+
+## v1.8 beta 1 — cloud-first convoy reliability
+
+This branch is **Phase 1 development**, not a production release and not an implementation of the complete v2.0 roadmap.
+
+- The Home dashboard reports the user's convoy/session status, currently online cars, whether the saved server is cloud or a local Wi-Fi relay, and measured network round-trip delay. This helps diagnose slow synchronization. It does **not** provide a live route map.
+- Settings labels "Find local Wi-Fi relay" as a tool for finding a *running laptop/Node relay on the same Wi-Fi*, **not nearby cars**. Search lasts 10 seconds and shows a useful explanation if no relay is found. The public Render endpoint works across distances over mobile data without local discovery.
+- Android WebSocket handling now responds to both closing and closed callbacks, displays retry status, stops private-location and microphone services on network loss, and attempts exponential reconnect. Music already on a device may continue while the data connection is interrupted; live coordination and the intercom require the network.
+- An intercom request now has an explicit pending state and 6.5-second timeout. Timeouts, denial, server error or disconnect release the microphone foreground service so a user can retry. The backend confirms an existing user's floor when they retry and reports rate-limit denial as a `ptt_denied` event instead of a generic error.
+- Updated the emulator regression assertion to the new actionable missing-video guidance, which changed when authenticated MP4 relay was introduced.
+
+### Physical acceptance tests before publishing
+
+1. Test on two *different* Android phones or head units (Android 6–15), both using the **same** current beta client and matching staging backend.
+2. Join a cloud session over two different mobile data providers; test guest-to-host and host-to-guest talk, audio routing, permission denial, turn taking and silence for longer than eight seconds.
+3. Disconnect mobile data mid-song and mid-PTT, restore coverage, confirm session reconnects, microphone foreground notification closes on loss, and the shared playlist/time position recovers.
+4. Test Bluetooth and head-unit speaker delays separately (app clock sync does not guarantee acoustic sync).
+5. Test "Find local Wi-Fi relay" with **no** relay (must report none) and separately with Node backend advertising `CARSYNC_LAN_DISCOVERY=1` on a trusted LAN.
+6. Confirm MP4 picture remains blocked while driving. Test playback of locally cached audio during weak coverage.
+7. Load-test the target convoy size; server currently defaults to one host plus ten guests. No claim of successful 20–50-car operation without load testing.
+
+Do not merge or deploy this branch until required GitHub checks and physical tests pass; maintain the live production server separately.
+
+
+## v1.8 beta 2 — reference convoy dashboard and opt-in live map
+
+The **Home** screen is now a working version of the supplied CarSync Convoy mockup: live session/role header, three statistic cards (online cars, farthest GPS separation, live PTT status), compact Now Playing progress, one large green Push to Talk / Stop Talking surface, and shortcuts for Live Map / Playlist / Cars. The dashboard shows actual current data, **never mock values**. If distance is unknown, it displays a dash until both this car and another online car voluntarily provide fresh, accurate GPS fixes. Distances are straight-line estimates, not road distances.
+
+**Live Map** is an interactive OpenStreetMap view showing only online convoy cars with valid recent GPS fixes. Each vehicle must independently opt in to sharing; the map has explicit Start/Stop sharing controls and a link to the existing detailed Cars view. Map tiles require an internet connection; the OpenStreetMap tile provider may see the map area requested and a network IP, so do not assume tile requests are location-private. The map uses public community tiles for low-volume beta tests; replace the tile source with a properly contracted/provider-approved production tile service before scaling. Do not bulk download tiles. Attribution is visible on the map page. The app blocks interactive map use while driving or vehicle restrictions apply.
+
+Intercom button labels now follow the real floor state: Start/Stop/Cancel/Listening. Host and guest operate on the same authenticated voice floor. Microphone permission must be granted before transmitting; receiving requires no push-to-talk action. A large on-screen button is not a substitute for hands-free controls; do not use it while driving.
+
+This version is based on the previous passing v1.8.0-beta.1 development branch. **New CI checks are required** before phone testing. Keep production unchanged and keep this branch in draft until emulator testing and physical two-device verification pass.
+
+
+## v1.8.0-beta.3 — full convoy member roster and distance comparison
+
+The Live Map now displays a visible, labeled map marker for **every online member with a fresh, accurate, voluntarily shared GPS position**, rather than showing unlabeled pins. The view auto-fits all sharing cars when the set changes, while preserving a passenger's manual pan/zoom during ordinary location updates. A manual **Fit all cars** control resets the view.
+
+**Every registered convoy member** appears in a list below the map, including offline members and members without usable GPS. These entries show "Offline," "Location not shared or unavailable," or "GPS stale or inaccurate" instead of fabricating coordinates. Each car with an acceptable GPS fix shows its coordinates, accuracy, age, and straight-line separation from the selected reference car. **Tap another live car** (map label or roster entry) to recalculate distance from it to all other sharing cars. With 15 or fewer located cars, thin lines illustrate these straight-line separations; they are **not road routes or driving times**.
+
+The server already sends the GPS timestamp `location.at` and a corresponding `serverNow`. Android now accounts for the age of the fix using those server timestamps, instead of resetting the age to zero on every broadcast. The location provider now requests fixes every four seconds with zero minimum movement distance, because the previous five-meter movement threshold made stationary cars disappear when their server location timed out. Turning off GPS sharing or disabling the provider revokes shared location data immediately.
+
+Privacy: **no app can show the current location of a participant who has not opted into GPS sharing or whose GPS fix is unavailable**. Never advertise unavailable locations as tracked. Public OpenStreetMap tiles still require external internet tile requests, and the beta service is not yet approved for production convoy workloads. Location accuracy threshold is 250 meters and client location freshness threshold is 15 seconds; the backend removes positions after 10 seconds. No public API for historical route tracking or offline tracking has been added.
+
+Acceptance: enable consented GPS on two separate phones and verify both map markers and the real distance label; tap each car to compare separations; test a stopped car for at least a minute; revoke one device's GPS and verify its marker disappears but its roster entry remains; disable cellular data and verify stale location disappears; test three or more cars to confirm Fit all cars includes every usable fix.
+
+
+## v1.8.0-beta.4 — Automatic acoustic profiling and user-triggered voice commands
+
+**Automatic acoustic check:** Settings → "Automatic acoustic check · 3 tones (parked)" runs three automatic chirp speaker-to-microphone measurements (requires `RECORD_AUDIO`). It calculates and saves the median delay and variation; stable results must have three valid observations and 80 ms or less range. The app warns if an acoustic route appears to have changed by more than 100 ms since the previous reliable measurement. Calibration is blocked during driving, playback, active/pending intercom, and automotive devices without confirmed parked status. It does **not** secretly change the existing `latencyMs` sync compensation, because a phone's microphone/ADC delay is part of this measurement and absolute cross-car acoustic alignment cannot be inferred from it. Different devices and Bluetooth paths still need guided cross-device measurement before fully automatic cross-car synchronization is safe to enable.
+
+**Voice commands:** Home → **Voice** (and Settings → Voice commands) opens an explicit, one-shot speech-recognition dialog. Each request requires user confirmation that the car is parked and microphone permission. If Android 12+ provides an on-device recognizer, CarSync uses it; otherwise the user must **separately opt in** to the installed Android speech service, which may transmit audio over the internet. This choice is not silently enabled. No cloud voice recordings are stored by CarSync. No permanent wake word, background recording, open microphone, or automatic remote listening is implemented.
+
+Recognized English commands include "pause music", "resume music", "next track", "previous track", "talk to convoy", "show map", "show cars", "now playing", and "calibrate audio". The grammar rejects unknown and partial phrases. Playback commands honor guest music-control permissions. Intercom starts only when the authenticated floor is available; recognition ends before microphone capture starts. To stop an active microphone transmission, use the large **Stop Talking** button; concurrent speech recognition and PTT audio capture are blocked. Route/navigation commands never unlock complex UI while driving.
+
+**Testing:** Verify 3-tone behavior with speaker and microphone on a parked device, with silent/noisy environments, changed Bluetooth speaker routing, and denial of microphone permission. Test English recognition on a device with and without on-device SpeechRecognizer support and verify that system-provider network consent is opt-in. Verify guest cannot trigger host-only playback; start-talk requests must respect floor locking and fail visibly when unavailable. Green CI does not prove real speaker calibration or speech-recognition capability on a given aftermarket head unit. Production release and test server remain unchanged on this draft branch.
+
+
+## v1.8 beta 5 — Android speech language error 12 fix
+
+The earlier speech UI could report "On-device speech recognition available" but fail with Android error `12`: **requested recognition language is not supported by that speech engine**. The previous client passed generic `en` and assumed recognition would work whenever the device advertised an on-device engine. Availability of an on-device engine does not mean an English pack is installed.
+
+The one-shot parked Voice dialog now defaults to an explicit `en-US` locale and lets the user cycle to `en-GB` or **Device default** (does not force `RecognizerIntent.EXTRA_LANGUAGE`). Error 12 and error 13 (language supported but not downloaded/available) display actionable language/model advice. The dialog always offers an **opt-in** Android system-recognizer alternative, even if an on-device recognizer exists; this provider may transmit speech data online. CarSync never switches to a potentially cloud-backed speech provider without the user's opt-in. No always-on wake word or background voice recording was introduced.
+
+Device steps: park, open Home → Voice, confirm parked, choose English (US) then Listen once. On code 12, try English (UK) or Device default. Check Android's speech-recognition language/model downloads. With explicit consent, select the Android system speech provider. If the phone lacks any suitable English speech-recognition engine, the app cannot supply one; installation of supported language packs or a provider may be required. New pure unit tests cover error codes and choices. Real OEM/head-unit testing is still mandatory.
+
+
+## CarSync 1.9 beta 1 — Professional Convoy Radio foundation
+
+This beta develops the **existing** CarSync one-speaker-at-a-time internet radio. It does not claim walkie-talkie reliability in weak or absent cellular coverage.
+
+- **Compact radio transport:** Android produces 20 ms, 16 kHz mono PCM16 frames, optionally encoded using G.711 μ-law before sending. The 320-byte G.711 frame is half the 640-byte PCM16 frame. Android and the server negotiate `convoy_ptt_mulaw_v1`; servers without the new capability continue to use the earlier `ptt_pcm` protocol. On the new server, each receiving client declares support for `mulaw16` during WebSocket authentication. The backend converts **once per codec**, then fans out the correct version: older members receive PCM16, newer members receive G.711. Do not advertise this as **Opus** (still a separate roadmap item); G.711 compresses less efficiently.
+- **Head-unit voice processing:** The app attempts Android's `AcousticEchoCanceler`, `NoiseSuppressor`, and `AutomaticGainControl` attached to its active voice AudioRecord session. Each DSP effect is optional; unsupported devices continue without it. Input attempts Android's voice-communication source before the standard microphone. Output uses the selected Android media-speaker path rather than routing intentionally to the phone earpiece.
+- **Smooth music volume reduction:** Music now fades toward 22% of the original volume over 220 ms whenever someone speaks, and smoothly returns afterwards. Playback timing is not paused or adjusted by ducking.
+- **Latency robustness:** The client limits buffered live voice frames and the backend drops voice frames for recipients whose WebSocket buffers exceed 128 KiB, avoiding a seconds-long spoken backlog when mobile data is poor. Frame size is checked before broadcast; a compressed packet cannot be injected by a client that did not negotiate the codec.
+- **Diagnostics:** Home indicates compressed/standard radio mode; Settings shows codec and whether the current Android microphone offers optional echo and noise suppression.
+- **Compatibility:** Older apps keep their PCM16 audio path on this new backend; the new app uses PCM16 on older backends. Both must remain connected to the *same* convoy server. All voice traffic is scoped to authenticated session members. No permanent microphone recording or storage of raw PTT data was added.
+
+Release gate: CI tests (codec quality, mixed-version fanout, Android unit/emulator checks) must pass before APK distribution. Real-head-unit acceptance testing is required with different Bluetooth speakers, an unplugged microphone, repeated PTT handoffs, music duck/unduck, and a network interruption. The current beta does **not** include Opus, persistent offline two-way radio, automatic channel selection, guaranteed Bluetooth SCO microphone routing, safety-critical emergency messaging, or performance-proven 50-car voice broadcast. Do not merge to `main` or deploy production without those constraints being understood.
+
+
+## v1.9.0-beta.3 — optional Bluetooth voice routing and 10-car integration test
+
+- Settings → Convoy radio → **Prefer Bluetooth call microphone** is an opt-in choice; it defaults OFF and can only be changed when parked and while the radio is idle. Android 12+ requests `BLUETOOTH_CONNECT` ("Nearby devices"). Android 6–11 uses the legacy SCO headset API. When PTT begins, the app attempts Android's Bluetooth **communication/call** route and explicitly prefers a connected Bluetooth call microphone for AudioRecord. When PTT ends or the connection drops, it clears the route and restores the prior audio mode. An ordinary Bluetooth music-only A2DP connection is not guaranteed to offer a call microphone; missing input keeps the default Android route. This may temporarily reduce audio fidelity because SCO call audio has narrower bandwidth than A2DP music. Device support, connected-headset state and routing vary; do not promise support for every car stereo.
+- The server now has a **ten-car simulated integration test**: one host plus nine guests use genuine, authenticated WebSocket connections to the in-process server. It verifies the server's session fanout, frame codec negotiation, 15 voice frames at roughly 20 ms pacing, and handoff between two different speakers. It reports elapsed time in the CI logs, but local loopback measurements **are not** end-to-end vehicle-to-vehicle network or speaker latency benchmarks. Real carrier-network testing, latency/drift sampling, varying radio coverage and larger-convoy load testing remain required.
+- This branch uses the existing separate v1.9 radio test server; older production and earlier beta servers are unchanged. The new app works with an older PCM16 backend but compact voice needs a backend advertising the G.711 capability.
+- Before public release, check Bluetooth microphone permission denial, headphones versus car head unit, disconnected SCO devices, host/guest talk both directions, voice route recovery after disconnect, mixed Bluetooth/non-Bluetooth cars and continued music playback. Measure jitter/latency and ensure there is no stuck microphone foreground service. Test only when parked, never use the touchscreen while driving. Do not imply Opus, local offline intercom or guaranteed 50-car capacity.
+
+
+## v1.9.0-beta.4 — internet-first setup clarification
+
+CarSync uses **one internet connection per car** (cellular data or internet-connected Wi-Fi) for distant convoy music, talk and location. Bluetooth **cannot** carry the session between cars kilometers apart: it is only an optional local connection to a car's call-capable microphone/speakers. The toggle is OFF for first-time installs and stays OFF until the member explicitly opts in while parked; toggling it does not affect the internet server. Existing users' explicit setting is preserved when upgrading. Head units without a suitable Bluetooth call microphone continue using Android's normal input/output devices. Settings now labels each responsibility plainly, and unit tests verify that internet server defaults never require Bluetooth.
+
+
+## CarSync v1.9.0-beta.5 — continuous audio and scratch/rebuffer investigation
+
+A test user reported the music played but had occasional "scratch" sounds after earlier uninterrupted playback. Investigation found that the synchronized player applied up to ±2% playback-speed correction on **every 250 ms tick**, and sought to the server timeline when drift exceeded **300 ms**, with a seek allowed every **1.5 seconds**. Frequent speed changes or seeks can cause an audible glitch on some Android head units. This is a plausible cause, **not a verified diagnosis** for every device.
+
+Changes:
+- New pure Kotlin `PlaybackContinuityGuard` smooths timing measurements, ignores transient clock spikes, keeps a 120 ms correction deadband, limits soft rate correction to ±0.8% and issues speed commands at most every 1.5 seconds, rather than on every 250 ms tick.
+- A hard sync seek now requires measured timing error ≥1.8 seconds and persistent smoothed drift ≥1.5 seconds for at least 1.75 seconds. Subsequent hard seeks must be at least 15 seconds apart. Hard seeks are suppressed while any convoy intercom announcement is active. An explicit play/seek/track-change command still takes effect immediately.
+- The player resets its continuity filter when preparing a new track and after authoritative playback revisions; stale measurements from one song cannot repeatedly seek the next song.
+- Removed the UI volume slider's forced ExoPlayer 0.2/1.0 gain jumps during PTT, preserving smooth music ducking and ordinary Android stream-volume control.
+- Settings now displays **Unexpected rebuffer events** and **large sync recoveries**, along with the most recent correction status. A rebuffer counter increases only when music had actually been playing before `STATE_BUFFERING` while playback remained requested, avoiding counting initial playback preparation as a stall.
+- Unit tests cover transient jitter, sustained severe drift, slow gentle adjustment, announcements, and reset behavior.
+
+Limitations: Without device recordings and a comparison between local MP3 playback and streamed convoy audio, we cannot know whether observed scratches come from output-route switching, Bluetooth codec quality, damaged MP3 source, network rebuffering, or timing seeks. Test the same file locally and remotely on a parked phone at safe listening volume. Verify a song plays for five minutes without new rebuffer events or large sync recoveries. A change in network quality or external audio hardware may require additional tuning. Nothing has been deployed to production.
+
+
+## v1.9.0-beta.6 — Live Map reliability and connection diagnosis
+
+The prior Live Map could show no vehicles, stale status or disappearing car pins even with a connected convoy. Confirmed code issues: Android subscribed only to satellite GPS if enabled and could ignore valid network-provider locations; it did not restart voluntary sharing after a temporary WebSocket reconnection; the server expired positions after 10 seconds while phone GPS providers could deliver fixes more slowly.
+
+Changes:
+- Opt-in Android location now subscribes to both available permitted providers (GPS and network). A fresh, accurate last-known fix can seed the display immediately; old cached fixes or positions with accuracy above 250 m are never used. Location permissions and explicit user opt-in remain mandatory.
+- The server now retains *the latest voluntarily shared location* for up to 30 seconds, not 10, to bridge temporary provider delays. The map accepts server timestamps up to 35 seconds and always drops expired/unshared/offline coordinates. The server sends immediate revocation when a participant disables sharing.
+- An opt-in GPS session resumes after a temporary internet drop when the same active session reconnects, provided Android permits restarting the foreground location service. Sharing stops if the user turns it off, leaves, loses location permission or the original session expires. No historical tracking or inferred coordinates are added.
+- Live Map now distinguishes **Sharing OFF** from **Sharing ON but waiting for a good GPS fix** and explains that blank map tiles require network access. Each car still appears in the roster, even when it does not consent or a recent fix is unavailable. Distances remain straight-line estimates from real consented fixes, not street routes.
+- The beta points to a **separate Render test backend** at https://carsync-music-map-test.onrender.com. Existing configured endpoints and active sessions do not change automatically. After leaving a session, previous uncustomized test defaults move to the matching map server. The main production backend is unchanged.
+
+Release verification: complete Android builds/unit tests, backend tests for 30-second TTL boundaries and immediate opt-out, and emulator matrix. Test with two phones with GPS on and explicit app location permission; put one phone indoors or briefly disable data, wait for resumption; test manual stop-sharing privacy and no stale map markers. The application still cannot locate nonconsenting members or show reliable road-driving distance without a routing service. Third-party OpenStreetMap public map tiles can be temporarily blocked or unavailable.

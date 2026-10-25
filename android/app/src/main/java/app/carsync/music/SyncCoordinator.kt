@@ -9,7 +9,6 @@ import kotlinx.coroutines.*
 import kotlinx.coroutines.flow.*
 import okhttp3.*
 import okhttp3.MediaType.Companion.toMediaType
-import okhttp3.HttpUrl.Companion.toHttpUrlOrNull
 import org.json.*
 import java.io.IOException
 import java.util.UUID
@@ -22,17 +21,18 @@ data class Car(
     val memberId: String = "", val location: ConvoyPosition? = null
 )
 data class AppState(
-    val endpoint: String = ServerDefaults.CONVOY_URL, val carName: String = "My car", val code: String = "", val role: String = "", val connected: Boolean = false,
-    val library: List<Track> = emptyList(), val playlists: List<SavedPlaylist> = emptyList(), val queue: List<RemoteTrack> = emptyList(), val cars: List<Car> = emptyList(), val maxGuests: Int = 10, val speakerId: String? = null, val memberId: String = "", val votes: Map<String, Int> = emptyMap(), val radarEnabled: Boolean = false, val discoveredServer: String = "",
+    val endpoint: String = ServerDefaults.LEGACY_URL, val carName: String = "My car", val code: String = "", val role: String = "", val connected: Boolean = false,
+    val library: List<Track> = emptyList(), val playlists: List<SavedPlaylist> = emptyList(), val queue: List<RemoteTrack> = emptyList(), val cars: List<Car> = emptyList(), val maxGuests: Int = 10, val speakerId: String? = null, val memberId: String = "", val votes: Map<String, Int> = emptyMap(), val radarEnabled: Boolean = false, val discoveredServer: String = "", val localSearchActive: Boolean = false, val localSearchStatus: String = "", val reconnectAttempt: Int = 0, val talkPending: Boolean = false,
     val index: Int = 0, val positionMs: Long = 0, val playing: Boolean = false, val buffering: Boolean = false, val missing: Boolean = false,
     val clockReady: Boolean = false, val driftMs: Long? = null, val rttMs: Long = 0, val volume: Float = 0.8f,
     val guestControls: Boolean = false, val sharing: Boolean = false, val guestAdditions: Boolean = false, val serverFeatures: Set<String> = emptySet(), val pendingGuestSong: String = "", val pendingGuestSongs: List<String> = emptyList(), val audioAvailable: Set<String> = emptySet(), val audioManifestKnown: Boolean = false, val repeat: String = "off", val driving: Boolean = false,
     val latencyMs: Long = 0, val message: String = "Import MP3s and create or join a session.", val busy: Boolean = false,
     val invitationCode: String = "", val invitationServer: String = "", val serviceReady: Boolean = false, val requestedPlaying: Boolean = false, val audioError: String = "",
-    val parkedConfirmed: Boolean = false, val audioOnlyVideo: Boolean = false, val automotive: Boolean = false, val vehicleKnown: Boolean = false, val vehicleRestricted: Boolean = false, val mediaProtocol: Int = 1, val acousticProbeMs: Long? = null
+    val parkedConfirmed: Boolean = false, val audioOnlyVideo: Boolean = false, val automotive: Boolean = false, val vehicleKnown: Boolean = false, val vehicleRestricted: Boolean = false, val mediaProtocol: Int = 1, val syncCorrectionStatus: String = "Steady", val syncHardSeeks: Int = 0, val audioRebuffers: Int = 0, val preferBluetoothRadio: Boolean = false, val radioStatus: String = "Waiting for a radio connection", val acousticProbeMs: Long? = null, val acousticVariationMs: Long? = null, val acousticProfileReliable: Boolean = false
 ) {
     val canControl get() = role == "host" || role == "local" || guestControls
     val supportsVoice get() = "convoy_ptt_pcm16_v1" in serverFeatures
+    val supportsCompactRadio get() = "convoy_ptt_mulaw_v1" in serverFeatures
     val supportsRadar get() = "convoy_location_v1" in serverFeatures
     val supportsGuestMusic get() = "guest_music_upload_v1" in serverFeatures
     val track get() = queue.getOrNull(index)
@@ -47,15 +47,45 @@ class SyncCoordinator(private val context: Context, val dao: LibraryDao, prefere
         !prefs.getString("code", "").isNullOrBlank()
     )
     private val scope = CoroutineScope(SupervisorJob() + Dispatchers.Main.immediate)
-    val http = OkHttpClient.Builder().connectTimeout(10, java.util.concurrent.TimeUnit.SECONDS).readTimeout(30, java.util.concurrent.TimeUnit.SECONDS).pingInterval(10, java.util.concurrent.TimeUnit.SECONDS).build()
-    private val mutable = MutableStateFlow(AppState(endpoint = initialEndpoint, carName = prefs.getString("name", "My car")!!, code = prefs.getString("code", "")!!, role = prefs.getString("role", "")!!, memberId = prefs.getString("memberId", "")!!, latencyMs = prefs.getLong("latency", 0), driving = prefs.getBoolean("driving", false)))
+    val http = OkHttpClient.Builder().followRedirects(false).followSslRedirects(false).connectTimeout(10, java.util.concurrent.TimeUnit.SECONDS).readTimeout(30, java.util.concurrent.TimeUnit.SECONDS).pingInterval(10, java.util.concurrent.TimeUnit.SECONDS).build()
+    private val mutable = MutableStateFlow(AppState(endpoint = initialEndpoint, carName = prefs.getString("name", "My car")!!, code = prefs.getString("code", "")!!, role = prefs.getString("role", "")!!, memberId = prefs.getString("memberId", "")!!, latencyMs = prefs.getLong("latency", 0), driving = prefs.getBoolean("driving", false),
+        acousticProbeMs = prefs.getLong("acoustic_profile_ms", -1).takeIf { it >= 0 },
+        acousticVariationMs = prefs.getLong("acoustic_profile_variation", -1).takeIf { it >= 0 },
+        acousticProfileReliable = prefs.getBoolean("acoustic_profile_reliable", false),
+        preferBluetoothRadio = prefs.getBoolean("bluetoothRadio", false)))
     val state: StateFlow<AppState> = mutable.asStateFlow()
     private var bearer = prefs.getString("token", "")!!
     private var ws: WebSocket? = null
     private val convoyAudio = ConvoyAudio(context, { player },
-        { data -> ws?.send(JSONObject().put("type", "ptt_pcm").put("data", data).toString()) },
-        { reason -> scope.launch { message(reason); pttRelease() } }
+        { codec, data ->
+            val type = if (codec == "mulaw16") "ptt_mulaw" else "ptt_pcm"
+            ws?.send(JSONObject().put("type", type).put("data", data).toString())
+        },
+        { reason -> scope.launch { message(reason); pttRelease() } },
+        { detail -> scope.launch { update { it.copy(radioStatus = detail) } } }
     )
+    init { convoyAudio.configureBluetoothRadio(prefs.getBoolean("bluetoothRadio", false)) }
+
+    fun preferBluetoothRadio(enabled: Boolean) {
+        if (state.value.driving || state.value.vehicleRestricted) {
+            message("Park before changing Bluetooth call-audio preferences."); return
+        }
+        if (state.value.speakerId != null || state.value.talkPending) {
+            message("Stop the active intercom before changing audio routing."); return
+        }
+        if (enabled && android.os.Build.VERSION.SDK_INT >= 31 &&
+            androidx.core.content.ContextCompat.checkSelfPermission(context,
+                android.Manifest.permission.BLUETOOTH_CONNECT) != android.content.pm.PackageManager.PERMISSION_GRANTED) {
+            message("Allow Nearby devices permission for Bluetooth headset call audio."); return
+        }
+        prefs.edit().putBoolean("bluetoothRadio", enabled).apply()
+        update { it.copy(preferBluetoothRadio = enabled,
+            radioStatus = if (enabled) "Bluetooth headset call audio preferred (when available)." else
+                "Android default music and microphone routes preferred.") }
+        convoyAudio.configureBluetoothRadio(enabled)
+    }
+
+    private var locationConsentForCurrentSession = false
     private var recentMovingAtMs = -100000L
     private val radar = ConvoyRadar(context) { loc ->
         if (loc != null && loc.hasSpeed() && loc.speed > 5f / 3.6f && loc.accuracy < 30f) {
@@ -69,15 +99,37 @@ class SyncCoordinator(private val context: Context, val dao: LibraryDao, prefere
             .put("accuracy", loc.accuracy.toDouble())
         ws?.send(packet.toString())
     }
-    private val discovery = LanDiscovery(context) { endpoint ->
-        scope.launch { update { it.copy(discoveredServer = endpoint) } }
+    private val discovery = LanDiscovery(context,
+        { endpoint -> scope.launch {
+            update { it.copy(discoveredServer = endpoint, localSearchStatus = "Found a local Wi-Fi relay at $endpoint", localSearchActive = false) }
+            stopDiscovery()
+        } },
+        { status -> scope.launch { update { it.copy(localSearchStatus = status) } } }
+    )
+    private var discoveryTimeout: Job? = null
+    fun beginDiscovery() {
+        if (state.value.localSearchActive) return
+        update { it.copy(discoveredServer = "", localSearchActive = true, localSearchStatus = "Searching Wi-Fi for a CarSync relay for 10 seconds…") }
+        discovery.start()
+        discoveryTimeout?.cancel()
+        discoveryTimeout = scope.launch {
+            delay(10000)
+            if (state.value.localSearchActive) {
+                discovery.stop()
+                update { it.copy(localSearchActive = false,
+                    localSearchStatus = "No local relay found. This is normal for cloud convoys: use the automatic internet server. A laptop relay must run on the same Wi-Fi with mDNS enabled.") }
+            }
+        }
     }
-    fun beginDiscovery() = discovery.start()
-    fun stopDiscovery() = discovery.stop()
+    fun stopDiscovery() {
+        discoveryTimeout?.cancel(); discoveryTimeout = null
+        discovery.stop(); update { it.copy(localSearchActive = false) }
+    }
     fun toggleRadar(enabled: Boolean) {
         if (enabled && !state.value.supportsRadar) { message("Convoy radar needs the updated session server."); return }
         if (enabled && !state.value.connected) { message("Join a session before sharing your location."); return }
         if (!enabled) {
+            locationConsentForCurrentSession = false
             radar.stop()
             ConvoyForeground.stopLocation(context)
             update { it.copy(radarEnabled = false) }
@@ -88,9 +140,16 @@ class SyncCoordinator(private val context: Context, val dao: LibraryDao, prefere
             ConvoyForeground.stopLocation(context)
             message("Location cannot start. Allow location access while CarSync is open.")
         }
+        if (started) locationConsentForCurrentSession = true
         update { it.copy(radarEnabled = started) }
     }
+    private var talkGrantTimeout: Job? = null
+    private fun clearTalkRequest() {
+        talkGrantTimeout?.cancel(); talkGrantTimeout = null
+        update { it.copy(talkPending = false) }
+    }
     fun pttRequest() {
+        if (state.value.talkPending) return
         if (!state.value.connected) { message("Join a session first to talk with another car."); return }
         if (state.value.speakerId != null) { message("Intercom is busy. Release the current speaker first."); return }
         if (!state.value.supportsVoice) { message("Intercom needs the newer convoy server. Update your Render deployment or use the matching local backend."); return }
@@ -98,10 +157,28 @@ class SyncCoordinator(private val context: Context, val dao: LibraryDao, prefere
             message("Microphone service could not start. Open CarSync and try again.")
             return
         }
-        if (ws?.send(JSONObject().put("type", "ptt_request").toString()) != true) { ConvoyForeground.stopMicrophone(context); message("Intercom connection unavailable. Reconnect and retry.") } else message("Requesting talk channel…")
+        if (ws?.send(JSONObject().put("type", "ptt_request").toString()) != true) {
+            ConvoyForeground.stopMicrophone(context)
+            message("Intercom connection unavailable. Reconnect and retry.")
+            return
+        }
+        update { it.copy(talkPending = true) }
+        message("Requesting talk channel…")
+        talkGrantTimeout?.cancel()
+        talkGrantTimeout = scope.launch {
+            delay(6500)
+            if (state.value.talkPending) {
+                clearTalkRequest()
+                ConvoyForeground.stopMicrophone(context)
+                ws?.send(JSONObject().put("type", "ptt_release").toString())
+                message("Talk request timed out. Check mobile data and retry.")
+            }
+        }
     }
     fun pttRelease() {
+        clearTalkRequest()
         convoyAudio.stopCapture()
+        convoyAudio.endCallRoute()
         ConvoyForeground.stopMicrophone(context)
         if (state.value.speakerId == state.value.memberId) {
             convoyAudio.duck(false)
@@ -202,18 +279,44 @@ class SyncCoordinator(private val context: Context, val dao: LibraryDao, prefere
             }
         }
     }
+    /** Automatically performs three acoustic loopback measurements while parked.
+     * Results are diagnostics only; recording latency is not an output-only offset.
+     */
     fun measureAcoustics() {
-        if (state.value.driving || state.value.playing || state.value.requestedPlaying ||
+        if (state.value.busy || state.value.driving || state.value.playing || state.value.requestedPlaying ||
+            state.value.speakerId != null || state.value.talkPending ||
             (state.value.automotive && (!state.value.vehicleKnown || state.value.vehicleRestricted || !state.value.parkedConfirmed))) {
-            message("Park and pause music before starting acoustic measurement."); return
+            message("Park, stop intercom and pause music before acoustic calibration."); return
         }
         scope.launch {
-            update { it.copy(busy = true, acousticProbeMs = null) }
+            update { it.copy(busy = true) }
+            val oldProfile = prefs.getLong("acoustic_profile_ms", -1L).takeIf { it >= 0 }
             try {
-                val result = AcousticProbe(context).measure()
-                update { it.copy(acousticProbeMs = result) }
-                message(if (result == null) "Measurement unavailable. Allow microphone permission and try a quieter cabin." else "Measured speaker-to-microphone loopback about ${result}ms. Diagnostic only; do not apply as the device offset.")
-            } finally { update { it.copy(busy = false) } }
+                val probe = AcousticProbe(context)
+                val measurements = mutableListOf<Long?>()
+                repeat(3) { index ->
+                    if (state.value.driving || state.value.speakerId != null) throw IllegalStateException("Stopped: vehicle or intercom became active")
+                    message("Automatic acoustic check: tone ${index + 1} of 3. Hold the phone still and keep the cabin quiet.")
+                    measurements += probe.measure()
+                    if (index < 2) delay(300)
+                }
+                val profile = AutomaticAcousticCalibration.summarize(measurements)
+                if (profile == null) {
+                    message("Acoustic calibration failed. Check microphone access, speaker volume and cabin noise.")
+                } else {
+                    prefs.edit().putLong("acoustic_profile_ms", profile.estimatedRoundTripMs)
+                        .putLong("acoustic_profile_variation", profile.variationMs)
+                        .putBoolean("acoustic_profile_reliable", profile.reliable).apply()
+                    update { it.copy(acousticProbeMs = profile.estimatedRoundTripMs,
+                        acousticVariationMs = profile.variationMs, acousticProfileReliable = profile.reliable) }
+                    val routeChange = AutomaticAcousticCalibration.routeChanged(oldProfile, profile)
+                    val quality = if (profile.reliable) "stable" else "variable"
+                    message("Automatic acoustic profile: ${profile.estimatedRoundTripMs}ms speaker-to-mic, ${profile.variationMs}ms variation ($quality)." +
+                        if (routeChange) " Audio route changed; check manual synchronization settings." else
+                            " This includes microphone delay and cannot automatically align different cars.")
+                }
+            } catch (e: Exception) { message("Calibration stopped: ${e.message.orEmpty()}") }
+            finally { update { it.copy(busy = false) } }
         }
     }
     private var generation = 0
@@ -236,7 +339,9 @@ class SyncCoordinator(private val context: Context, val dao: LibraryDao, prefere
     private var endedRevision = -1L
     private var playPublishedHash: String? = null
     private var lastStatus = 0L
-    private var lastHardSeek = 0L
+    private val continuity = PlaybackContinuityGuard()
+    private var lastVideoSyncSeekMs = -30_000L
+    private var hasPlayedCurrentTrack = false
     private val pings = mutableSetOf<Double>()
     private fun localNow() = SystemClock.elapsedRealtime().toDouble()
     private fun serverNow() = localNow() + clock.offsetMs
@@ -257,7 +362,7 @@ class SyncCoordinator(private val context: Context, val dao: LibraryDao, prefere
         scope.launch { dao.observePlaylists().collect { list -> update { it.copy(playlists = list) } } }
     }
     fun attach(p: ExoPlayer) {
-        player = p; preparedHash = ""; activeRevision = -1; p.volume = 1f; refreshVideoOutput()
+        player = p; preparedHash = ""; activeRevision = -1; continuity.reset(); hasPlayedCurrentTrack = false; p.volume = 1f; refreshVideoOutput()
         val audio = context.getSystemService(Context.AUDIO_SERVICE) as android.media.AudioManager
         update { it.copy(serviceReady = true, volume = audio.getStreamVolume(android.media.AudioManager.STREAM_MUSIC).toFloat() / audio.getStreamMaxVolume(android.media.AudioManager.STREAM_MUSIC).coerceAtLeast(1)) }
         p.addListener(object : Player.Listener {
@@ -266,7 +371,15 @@ class SyncCoordinator(private val context: Context, val dao: LibraryDao, prefere
                 val detail = "Cannot play this ${if (state.value.track?.mediaType == "video") "video/codec" else "file"}: ${error.errorCodeName}. ${error.cause?.message.orEmpty()}. ${if (state.value.track?.mediaType == "video") "Try MP4 H.264/AAC or audio-only mode; codecs depend on the device." else "Try reimporting it or use Scan phone."}"
                 update { it.copy(audioError = detail, message = detail, requestedPlaying = false) }
             }
+            override fun onIsPlayingChanged(isPlaying: Boolean) {
+                if (isPlaying) hasPlayedCurrentTrack = true
+            }
             override fun onPlaybackStateChanged(playbackState: Int) {
+                if (playbackState == Player.STATE_BUFFERING && hasPlayedCurrentTrack &&
+                    state.value.requestedPlaying && !state.value.missing) {
+                    update { it.copy(audioRebuffers = it.audioRebuffers + 1,
+                        syncCorrectionStatus = "Buffering — check mobile data or song source") }
+                }
                 if (playbackState == Player.STATE_READY && clock.ready) desired?.let { if (serverNow() >= it.executeAt) apply(it) }
                 if (playbackState == Player.STATE_ENDED) {
                     if (state.value.role == "local") { if (state.value.index < state.value.queue.lastIndex) command("next") else update { it.copy(requestedPlaying = false) }; return }
@@ -279,14 +392,11 @@ class SyncCoordinator(private val context: Context, val dao: LibraryDao, prefere
         else if (state.value.role == "local" && state.value.queue.isNotEmpty()) { if (prepare(PlaybackFrame(state.value.index, state.value.positionMs, false, 0.0, 0)) && state.value.requestedPlaying && !automotiveVideoBlocked()) p.play() }
         loops?.cancel(); loops = scope.launch { while (isActive) { tick(); delay(250) } }
     }
-    fun detach() { convoyAudio.close(); radar.stop(); discovery.stop(); ConvoyForeground.stopLocation(context); ConvoyForeground.stopMicrophone(context); player = null; preparedHash = ""; activeRevision = -1; loops?.cancel(); scheduleJob?.cancel(); generation++; ws?.close(1000, "Service stopped"); ws = null; reconnect?.cancel(); update { it.copy(connected = false, playing = false, serviceReady = false) } }
+    fun detach() { clearTalkRequest(); convoyAudio.close(); radar.stop(); discovery.stop(); ConvoyForeground.stopLocation(context); ConvoyForeground.stopMicrophone(context); player = null; preparedHash = ""; activeRevision = -1; discoveryTimeout?.cancel(); loops?.cancel(); scheduleJob?.cancel(); generation++; ws?.close(1000, "Service stopped"); ws = null; reconnect?.cancel(); update { it.copy(connected = false, playing = false, serviceReady = false) } }
     fun shutdown() { detach(); vehicleSafety.close(); scope.cancel() }
     fun configure(endpoint: String, name: String) {
         require(!state.value.connected && state.value.code.isBlank()) { "Leave the current session before changing the server" }
-        val clean = endpoint.trim().trimEnd('/')
-        val url = clean.toHttpUrlOrNull() ?: error("Enter a full http:// or https:// server address")
-        require(url.encodedPath == "/" && url.query == null && url.username.isEmpty() && url.password.isEmpty()) { "Use the server root address without paths or credentials" }
-        require(url.isHttps || isLanHost(url.host)) { "Public servers require HTTPS. HTTP is allowed only on a private network." }
+        val clean = ServerDefaults.configuredRoot(endpoint)
         prefs.edit().putString("endpoint", clean).putBoolean("manualServer", true).putString("name", name.take(40)).apply(); update { it.copy(endpoint = clean, carName = name.take(40)) }
     }
     fun create() = establish(null)
@@ -315,35 +425,53 @@ class SyncCoordinator(private val context: Context, val dao: LibraryDao, prefere
     private fun connect() {
         if (bearer.isBlank() || player == null) return
         reconnect?.cancel(); val gen = ++generation; clock.reset(); pings.clear(); activeRevision = -1
-        update { it.copy(connected = false, clockReady = false, message = "Connecting…") }
+        update { it.copy(connected = false, clockReady = false, reconnectAttempt = attempts, message = if (attempts > 0) "Reconnecting to convoy server (attempt ${attempts + 1})…" else "Connecting…") }
         ws?.close(1000, "Reconnect")
         val url = state.value.endpoint.replaceFirst("https://", "wss://").replaceFirst("http://", "ws://") + "/ws"
         ws = http.newWebSocket(Request.Builder().url(url).build(), object : WebSocketListener() {
-            override fun onOpen(webSocket: WebSocket, response: Response) { webSocket.send(JSONObject().put("type", "auth").put("code", state.value.code).put("token", bearer).put("mediaCapabilities", JSONArray(listOf("audio", "video"))).toString()) }
+            override fun onOpen(webSocket: WebSocket, response: Response) { webSocket.send(JSONObject().put("type", "auth").put("code", state.value.code).put("token", bearer).put("mediaCapabilities", JSONArray(listOf("audio", "video"))).put("voiceCodecs", JSONArray(listOf("mulaw16"))).toString()) }
             override fun onMessage(webSocket: WebSocket, text: String) { scope.launch { if (gen == generation) try { receive(JSONObject(text)) } catch (e: Exception) { message("Invalid server message: ${e.message}") } } }
             override fun onFailure(webSocket: WebSocket, t: Throwable, response: Response?) { scope.launch { if (gen == generation) lost() } }
-            override fun onClosing(webSocket: WebSocket, code: Int, reason: String) { webSocket.close(code, reason); scope.launch { if (gen == generation) { if (code in 4001..4003) { message(reason); leave(false) } else lost() } } }
+            override fun onClosing(webSocket: WebSocket, code: Int, reason: String) {
+                webSocket.close(code, reason)
+                scope.launch { if (gen == generation) {
+                    if (code in 4001..4003) { message(reason); leave(false) } else lost()
+                } }
+            }
+            override fun onClosed(webSocket: WebSocket, code: Int, reason: String) {
+                scope.launch { if (gen == generation && state.value.code.isNotBlank() && code !in 4001..4003) lost() }
+            }
         })
     }
     private fun lost() {
+        clearTalkRequest()
         convoyAudio.close()
+        // Consent lasts only for this existing session; resume after a short
+        // internet dropout, but never after leaving or explicitly opting out.
+        locationConsentForCurrentSession = locationConsentForCurrentSession || state.value.radarEnabled
         radar.stop()
         ConvoyForeground.stopMicrophone(context)
         ConvoyForeground.stopLocation(context)
-        update { it.copy(connected = false, radarEnabled = false, speakerId = null, clockReady = false, message = "Connection lost. Local audio continues; reconnecting…") }
+        update { it.copy(connected = false, radarEnabled = false, speakerId = null, talkPending = false, clockReady = false, reconnectAttempt = attempts + 1, message = "Internet connection lost. Local media may continue; reconnecting automatically…") }
         scheduleJob?.cancel()
         if (reconnect?.isActive == true) return
         val delayMs = (1000L shl attempts.coerceAtMost(5)) + (0..500).random(); attempts++
         reconnect = scope.launch { delay(delayMs); reconnect = null; connect() }
     }
     private fun frame(x: JSONObject) = PlaybackFrame(x.getInt("index"), x.getDouble("positionMs").toLong(), x.getBoolean("playing"), x.getDouble("executeAt"), x.getLong("revision"))
-    private fun cars(array: JSONArray): List<Car> = (0 until array.length()).map { i ->
+    private fun cars(array: JSONArray, serverNowMs: Double? = null): List<Car> = (0 until array.length()).map { i ->
         val c = array.getJSONObject(i)
         val loc = c.optJSONObject("location")?.let {
+            // Server and Android clocks can differ. Age is calculated using the
+            // server's own fix timestamp and serverNow, then mapped to local time.
+            val ageMs = if (serverNowMs != null && serverNowMs.isFinite()) {
+                (serverNowMs - it.optDouble("at", serverNowMs))
+                    .toLong().coerceIn(0L, 40000L)
+            } else 0L
             ConvoyPosition(
                 it.optDouble("lat"), it.optDouble("lon"), it.optDouble("speed"),
                 it.optDouble("bearing"), it.optDouble("accuracy"),
-                System.currentTimeMillis()
+                System.currentTimeMillis() - ageMs
             )
         }
         Car(c.getString("name"), c.getString("role"), c.getBoolean("online"),
@@ -353,13 +481,15 @@ class SyncCoordinator(private val context: Context, val dao: LibraryDao, prefere
     }
     private fun receive(x: JSONObject) {
         when (x.getString("type")) {
-            "cars" -> update { it.copy(cars = cars(x.getJSONArray("cars"))) }
+            "cars" -> update { it.copy(cars = cars(x.getJSONArray("cars"), x.optDouble("serverNow", Double.NaN).takeIf(Double::isFinite))) }
             "guest_upload_granted" -> {
                 val hash = x.optString("hash")
                 if (hash.isNotBlank() && state.value.pendingGuestSong == hash) uploadGuestSong(hash)
             }
             "ptt_start" -> {
+                clearTalkRequest()
                 update { it.copy(speakerId = if (x.isNull("speakerId")) null else x.optString("speakerId")) }
+                convoyAudio.beginVoiceSession()
                 convoyAudio.duck(true)
                 message(if (x.optString("speakerId") == state.value.memberId) "Microphone granted. Talking to other cars." else "Listening to another car…")
                 // Capture only after the server explicitly grants the speaking floor.
@@ -370,13 +500,16 @@ class SyncCoordinator(private val context: Context, val dao: LibraryDao, prefere
                 }
             }
             "ptt_stop" -> {
+                clearTalkRequest()
                 if (state.value.speakerId == state.value.memberId) ConvoyForeground.stopMicrophone(context)
                 convoyAudio.close()
                 update { it.copy(speakerId = null) }
                 message("Intercom ready. Tap Start talking.")
             }
-            "ptt_pcm" -> convoyAudio.receive(x.getString("data"))
+            "ptt_pcm" -> convoyAudio.receive(x.getString("data"), "pcm16")
+            "ptt_mulaw" -> convoyAudio.receive(x.getString("data"), "mulaw16")
             "ptt_denied" -> {
+                clearTalkRequest()
                 ConvoyForeground.stopMicrophone(context)
                 message(x.optString("reason", "Intercom is busy"))
             }
@@ -392,15 +525,21 @@ class SyncCoordinator(private val context: Context, val dao: LibraryDao, prefere
                 attempts = 0
                 val array = x.getJSONArray("playlist")
                 val queue = (0 until array.length()).map { i -> val t = array.getJSONObject(i); RemoteTrack(t.getString("hash"), t.getString("title"), t.getString("artist"), t.optString("album"), t.getDouble("durationMs").toLong(), t.optString("mediaType", "audio"), t.optString("mimeType", "audio/mpeg"), t.optLong("sizeBytes"), t.optInt("width"), t.optInt("height")) }
-                val cars = cars(x.getJSONArray("cars"))
+                val cars = cars(x.getJSONArray("cars"), x.optDouble("serverNow", Double.NaN).takeIf(Double::isFinite))
                 val advertised = x.optJSONArray("capabilities")?.let { values ->
                     (0 until values.length()).map { i -> values.optString(i) }.toSet()
                 } ?: emptySet()
                 val wasConnected = state.value.connected
+                convoyAudio.setCompactVoice("convoy_ptt_mulaw_v1" in advertised)
                 val sharingRevoked = state.value.sharing && !x.getBoolean("sharing")
                 val available = x.optJSONArray("audioAvailable")?.let { a -> (0 until a.length()).map { a.getString(it) }.toSet() } ?: emptySet()
                 val audioChanged = state.value.audioAvailable != available || state.value.sharing != x.getBoolean("sharing")
-                update { it.copy(connected = true, queue = queue, cars = cars, maxGuests = x.optInt("maxGuests", 1).coerceIn(1, 50), guestControls = x.getBoolean("guestControls"), guestAdditions = x.optBoolean("guestAdditions", false), serverFeatures = advertised, speakerId = if (x.isNull("speakerId")) null else x.optString("speakerId").takeIf { name -> name.isNotBlank() && name != "null" }, votes = x.optJSONObject("votes")?.let { obj -> obj.keys().asSequence().associateWith { key -> obj.optInt(key) } } ?: emptyMap(), sharing = x.getBoolean("sharing"), audioAvailable = available, audioManifestKnown = x.has("audioAvailable"), mediaProtocol = x.optInt("mediaProtocol", 1), repeat = x.getString("repeat"), message = if (!wasConnected) "Session connected. Matching clocks…" else it.message) }
+                update { it.copy(connected = true, reconnectAttempt = 0, queue = queue, cars = cars, maxGuests = x.optInt("maxGuests", 1).coerceIn(1, 50), guestControls = x.getBoolean("guestControls"), guestAdditions = x.optBoolean("guestAdditions", false), serverFeatures = advertised,
+                    radioStatus = if ("convoy_ptt_mulaw_v1" in advertised) "Compact radio · G.711 16 kHz (half-size voice frames)" else "Compatible radio · PCM16 (uncompressed)", speakerId = if (x.isNull("speakerId")) null else x.optString("speakerId").takeIf { name -> name.isNotBlank() && name != "null" }, votes = x.optJSONObject("votes")?.let { obj -> obj.keys().asSequence().associateWith { key -> obj.optInt(key) } } ?: emptyMap(), sharing = x.getBoolean("sharing"), audioAvailable = available, audioManifestKnown = x.has("audioAvailable"), mediaProtocol = x.optInt("mediaProtocol", 1), repeat = x.getString("repeat"), message = if (!wasConnected) "Session connected. Matching clocks…" else it.message) }
+                if (!wasConnected && locationConsentForCurrentSession &&
+                    "convoy_location_v1" in advertised && !state.value.radarEnabled) {
+                    toggleRadar(true)
+                }
                 if (!wasConnected && "convoy_ptt_pcm16_v1" !in advertised) {
                     message("Connected to an older server: intercom, GPS, voting and guest songs need the v1.7 backend.")
                 }
@@ -414,6 +553,12 @@ class SyncCoordinator(private val context: Context, val dao: LibraryDao, prefere
             }
             "error" -> {
                 val error = x.getString("error")
+                if (state.value.talkPending) {
+                    clearTalkRequest()
+                    ConvoyForeground.stopMicrophone(context)
+                    message("Talk request rejected: $error")
+                    return
+                }
                 if (state.value.pendingGuestSong.isNotBlank() && !state.value.busy) {
                     update { it.copy(pendingGuestSong = "") }
                     message("File skipped: $error")
@@ -432,6 +577,7 @@ class SyncCoordinator(private val context: Context, val dao: LibraryDao, prefere
         if (uri == null) { p.pause(); p.clearMediaItems(); preparedHash = ""; update { it.copy(index = f.index, missing = true, playing = false, audioError = "", message = if (remote.mediaType == "video") "Missing video: ${remote.title}. Request MP4 sharing or import the matching file." else if (it.sharing) "Waiting for the host to upload ${remote.title}. Playback will start automatically." else "Connected, but this song is not on this device. Ask the host to tap Share music with guests, or import the identical MP3.") }; return false }
         val metadata = MediaMetadata.Builder().setTitle(remote.title).setArtist(remote.artist).setAlbumTitle(remote.album).apply { local?.artPath?.let { setArtworkUri(Uri.fromFile(java.io.File(it))) } }.build()
         activeRevision = -1
+        continuity.reset(); hasPlayedCurrentTrack = false
         p.pause(); p.setMediaItem(MediaItem.Builder().setMediaId(remote.hash).setUri(uri).setMimeType(remote.mimeType).setMediaMetadata(metadata).build(), f.positionMs); p.prepare(); preparedHash = remote.hash
         update { it.copy(missing = false, index = f.index, audioError = "") }; return true
     }
@@ -453,7 +599,12 @@ class SyncCoordinator(private val context: Context, val dao: LibraryDao, prefere
         val target = f.target(serverNow(), state.value.latencyMs).coerceAtMost(state.value.queue.getOrNull(f.index)?.durationMs ?: Long.MAX_VALUE)
         // Apply a command once. Seeking again on every READY callback can keep a
         // slow video decoder buffering forever. Once playing, tick() corrects drift.
-        if (activeRevision != f.revision) { p.seekTo(target); activeRevision = f.revision; p.playbackParameters = PlaybackParameters(1f) }
+        if (activeRevision != f.revision) {
+            continuity.reset()
+            p.seekTo(target)
+            activeRevision = f.revision
+            if (p.playbackParameters.speed != 1f) p.playbackParameters = PlaybackParameters(1f)
+        }
         p.playWhenReady = f.playing
         update { it.copy(index = f.index, message = if (clock.rttMs > 500) "High network delay: synchronization may be less accurate." else "Following synchronized playback") }
     }
@@ -472,8 +623,32 @@ class SyncCoordinator(private val context: Context, val dao: LibraryDao, prefere
             val target = f.target(serverNow(), state.value.latencyMs).coerceAtMost(state.value.queue.getOrNull(f.index)?.durationMs ?: Long.MAX_VALUE)
             error = target - p.currentPosition
             if (f.playing && p.isPlaying) {
-                if (abs(error) > 300 && SystemClock.elapsedRealtime() - lastHardSeek > 1500) { p.seekTo(target); lastHardSeek = SystemClock.elapsedRealtime(); p.playbackParameters = PlaybackParameters(1f) }
-                else p.playbackParameters = PlaybackParameters(if (abs(error) > 35) driftSpeed(error) else 1f)
+                // Keep video frames aligned promptly; only music uses gentle
+                // continuity correction to avoid speaker clicks and scratches.
+                if (state.value.track?.mediaType == "video") {
+                    val nowMs = SystemClock.elapsedRealtime()
+                    if (abs(error) > 300 && nowMs - lastVideoSyncSeekMs > 1500) {
+                        p.seekTo(target)
+                        lastVideoSyncSeekMs = nowMs
+                        if (p.playbackParameters.speed != 1f) p.playbackParameters = PlaybackParameters(1f)
+                    } else {
+                        val targetSpeed = if (abs(error) > 35) driftSpeed(error) else 1f
+                        if (abs(p.playbackParameters.speed - targetSpeed) > 0.0005f)
+                            p.playbackParameters = PlaybackParameters(targetSpeed)
+                    }
+                } else {
+                val decision = continuity.next(error, SystemClock.elapsedRealtime(), state.value.speakerId != null)
+                if (decision.hardSeek) {
+                    p.seekTo(target)
+                    if (p.playbackParameters.speed != 1f) p.playbackParameters = PlaybackParameters(1f)
+                    update { it.copy(syncHardSeeks = it.syncHardSeeks + 1,
+                        syncCorrectionStatus = "Recovered persistent large time gap") }
+                } else if (decision.speed != null && abs(p.playbackParameters.speed - decision.speed) > 0.0005f) {
+                    p.playbackParameters = PlaybackParameters(decision.speed)
+                    update { it.copy(syncCorrectionStatus = if (decision.speed == 1f) "Steady" else
+                        "Gentle synchronization correction") }
+                }
+                }
             }
         }
         update { it.copy(positionMs = p.currentPosition, playing = p.isPlaying, buffering = p.playbackState == Player.STATE_BUFFERING, driftMs = error) }
@@ -554,7 +729,9 @@ class SyncCoordinator(private val context: Context, val dao: LibraryDao, prefere
     fun volume(v: Float) {
         val audio = context.getSystemService(Context.AUDIO_SERVICE) as android.media.AudioManager
         audio.setStreamVolume(android.media.AudioManager.STREAM_MUSIC, (v * audio.getStreamMaxVolume(android.media.AudioManager.STREAM_MUSIC)).toInt(), 0)
-        player?.volume = if (state.value.speakerId != null) 0.2f else 1f; update { it.copy(volume = v) }
+        // The volume slider sets Android media stream volume.
+        // Keep ExoPlayer gain untouched so intercom ducking can fade smoothly.
+        update { it.copy(volume = v) }
     }
     fun driving(v: Boolean) {
         if (!v && SystemClock.elapsedRealtime() - recentMovingAtMs < 15000L) {
@@ -659,14 +836,14 @@ class SyncCoordinator(private val context: Context, val dao: LibraryDao, prefere
     }
     fun audioToken() = bearer
     fun resume() { if (bearer.isNotBlank() && !state.value.connected) connect() }
-    fun leave(clearMessage: Boolean = true) { convoyAudio.close(); radar.stop(); ConvoyForeground.stopLocation(context); ConvoyForeground.stopMicrophone(context);
+    fun leave(clearMessage: Boolean = true) { locationConsentForCurrentSession = false; convoyAudio.close(); radar.stop(); ConvoyForeground.stopLocation(context); ConvoyForeground.stopMicrophone(context);
         generation++; reconnect?.cancel(); ws?.close(1000, "Left session"); ws = null; scheduleJob?.cancel(); player?.pause(); player?.clearMediaItems(); preparedHash = ""; desired = null; activeRevision = -1; bearer = ""
         val nextEndpoint = ServerDefaults.resolve(
             state.value.endpoint, prefs.getBoolean("manualServer", false), false
         )
         prefs.edit().remove("token").remove("code").remove("role").remove("memberId")
             .putString("endpoint", nextEndpoint).apply()
-        update { it.copy(endpoint = nextEndpoint, code = "", role = "", memberId = "", radarEnabled = false, speakerId = null, serverFeatures = emptySet(), guestAdditions = false, pendingGuestSong = "", pendingGuestSongs = emptyList(), connected = false, queue = emptyList(), cars = emptyList(), clockReady = false, driftMs = null, requestedPlaying = false, audioError = "", message = if (clearMessage) "Session left. The host can create a new session for the group." else it.message) }
+        update { it.copy(endpoint = nextEndpoint, code = "", role = "", memberId = "", radarEnabled = false, speakerId = null, serverFeatures = emptySet(), radioStatus = "Waiting for a radio connection", guestAdditions = false, pendingGuestSong = "", pendingGuestSongs = emptyList(), connected = false, queue = emptyList(), cars = emptyList(), clockReady = false, driftMs = null, requestedPlaying = false, audioError = "", message = if (clearMessage) "Session left. The host can create a new session for the group." else it.message) }
     }
     fun endSession() { scope.launch { try { withContext(Dispatchers.IO) { request("/sessions/${state.value.code}", "DELETE") }; leave() } catch (e: Exception) { message(e.message ?: "Could not end session") } } }
 }

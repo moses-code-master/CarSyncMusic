@@ -29,11 +29,22 @@ test('location sharing revokes immediately even after rate limiting', async t =>
   first.ws.send(JSON.stringify({type:'location',lat:-1.28,lon:36.8,speed:0,bearing:0,accuracy:7}));
   const present=await wait(second,x=>x.type==='cars'&&x.cars.some(c=>c.id===host.memberId&&c.location?.lat===-1.28));
   assert.equal(present.cars.find(c=>c.id===host.memberId).location.lon,36.8);
+  // A second independently opted-in car should appear on both peers' maps.
+  second.ws.send(JSON.stringify({type:'location',lat:-1.30,lon:36.81,speed:0,bearing:0,accuracy:8}));
+  const twoCars=await wait(first,x=>x.type==='cars'&&x.cars.some(c=>c.id===guest.memberId&&c.location?.lat===-1.30));
+  assert.equal(twoCars.cars.find(c=>c.id===guest.memberId).location.lon,36.81);
+  assert.equal(twoCars.cars.find(c=>c.id===host.memberId).location.lat,-1.28);
   for(let i=0;i<48;i++)first.ws.send(JSON.stringify({type:'location',lat:-1.28,lon:36.8,speed:0,bearing:0,accuracy:7}));
   await new Promise(r=>setTimeout(r,200));
   second.messages.length=0;
   first.ws.send(JSON.stringify({type:'location',enabled:false}));
   const revoked=await wait(second,x=>x.type==='cars'&&!x.cars.find(c=>c.id===host.memberId)?.location);
   assert.equal(revoked.cars.find(c=>c.id===host.memberId).location,undefined);
+  assert.equal(revoked.cars.find(c=>c.id===guest.memberId).location.lat,-1.30,
+    'Opting out on the host must not erase a separate guest location');
+  first.messages.length=0;
+  second.ws.send(JSON.stringify({type:'location',enabled:false}));
+  const guestRevoked=await wait(first,x=>x.type==='cars'&&!x.cars.find(c=>c.id===guest.memberId)?.location);
+  assert.equal(guestRevoked.cars.find(c=>c.id===guest.memberId).location,undefined);
   first.ws.close();second.ws.close();
 });
