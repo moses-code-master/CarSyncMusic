@@ -7,7 +7,7 @@ plugins {
 android {
     namespace = "app.carsync.music"
     compileSdk = 35
-    defaultConfig { applicationId = "app.carsync.music"; minSdk = 23; targetSdk = 35; versionCode = 23; versionName = "1.9.0-beta.6"; testInstrumentationRunner = "androidx.test.runner.AndroidJUnitRunner" }
+    defaultConfig { applicationId = "app.carsync.music"; minSdk = 23; targetSdk = 35; versionCode = 24; versionName = "1.9.0"; testInstrumentationRunner = "androidx.test.runner.AndroidJUnitRunner" }
     buildFeatures { compose = true; buildConfig = true }
     sourceSets.getByName("main").assets.srcDir(layout.buildDirectory.dir("generated/licenseAssets"))
     compileOptions { sourceCompatibility = JavaVersion.VERSION_17; targetCompatibility = JavaVersion.VERSION_17 }
