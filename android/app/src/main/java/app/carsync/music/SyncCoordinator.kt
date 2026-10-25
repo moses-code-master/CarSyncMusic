@@ -9,7 +9,6 @@ import kotlinx.coroutines.*
 import kotlinx.coroutines.flow.*
 import okhttp3.*
 import okhttp3.MediaType.Companion.toMediaType
-import okhttp3.HttpUrl.Companion.toHttpUrlOrNull
 import org.json.*
 import java.io.IOException
 import java.util.UUID
@@ -48,7 +47,7 @@ class SyncCoordinator(private val context: Context, val dao: LibraryDao, prefere
         !prefs.getString("code", "").isNullOrBlank()
     )
     private val scope = CoroutineScope(SupervisorJob() + Dispatchers.Main.immediate)
-    val http = OkHttpClient.Builder().connectTimeout(10, java.util.concurrent.TimeUnit.SECONDS).readTimeout(30, java.util.concurrent.TimeUnit.SECONDS).pingInterval(10, java.util.concurrent.TimeUnit.SECONDS).build()
+    val http = OkHttpClient.Builder().followRedirects(false).followSslRedirects(false).connectTimeout(10, java.util.concurrent.TimeUnit.SECONDS).readTimeout(30, java.util.concurrent.TimeUnit.SECONDS).pingInterval(10, java.util.concurrent.TimeUnit.SECONDS).build()
     private val mutable = MutableStateFlow(AppState(endpoint = initialEndpoint, carName = prefs.getString("name", "My car")!!, code = prefs.getString("code", "")!!, role = prefs.getString("role", "")!!, memberId = prefs.getString("memberId", "")!!, latencyMs = prefs.getLong("latency", 0), driving = prefs.getBoolean("driving", false),
         acousticProbeMs = prefs.getLong("acoustic_profile_ms", -1).takeIf { it >= 0 },
         acousticVariationMs = prefs.getLong("acoustic_profile_variation", -1).takeIf { it >= 0 },
@@ -397,10 +396,7 @@ class SyncCoordinator(private val context: Context, val dao: LibraryDao, prefere
     fun shutdown() { detach(); vehicleSafety.close(); scope.cancel() }
     fun configure(endpoint: String, name: String) {
         require(!state.value.connected && state.value.code.isBlank()) { "Leave the current session before changing the server" }
-        val clean = endpoint.trim().trimEnd('/')
-        val url = clean.toHttpUrlOrNull() ?: error("Enter a full http:// or https:// server address")
-        require(url.encodedPath == "/" && url.query == null && url.username.isEmpty() && url.password.isEmpty()) { "Use the server root address without paths or credentials" }
-        require(url.isHttps || isLanHost(url.host)) { "Public servers require HTTPS. HTTP is allowed only on a private network." }
+        val clean = ServerDefaults.configuredRoot(endpoint)
         prefs.edit().putString("endpoint", clean).putBoolean("manualServer", true).putString("name", name.take(40)).apply(); update { it.copy(endpoint = clean, carName = name.take(40)) }
     }
     fun create() = establish(null)
