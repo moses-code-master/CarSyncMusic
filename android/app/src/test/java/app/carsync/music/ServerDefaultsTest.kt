@@ -17,8 +17,8 @@ class ServerDefaultsTest {
 
     @Test fun explicitOverridesAreNeverReplaced() {
         assertEquals(ServerDefaults.LEGACY_URL, ServerDefaults.resolve(ServerDefaults.LEGACY_URL, true, false))
-        assertEquals(ServerDefaults.CONVOY_URL, ServerDefaults.resolve(ServerDefaults.CONVOY_URL, true, false))
-        assertEquals(ServerDefaults.RADIO_URL, ServerDefaults.resolve(ServerDefaults.RADIO_URL, true, false))
+        assertEquals(ServerDefaults.LEGACY_URL, ServerDefaults.resolve(ServerDefaults.CONVOY_URL, true, false))
+        assertEquals(ServerDefaults.LEGACY_URL, ServerDefaults.resolve(ServerDefaults.RADIO_URL, true, false))
         assertEquals("https://example.net", ServerDefaults.resolve("https://example.net", true, false))
         assertEquals("http://192.168.10.5:8080", ServerDefaults.resolve("http://192.168.10.5:8080", false, false))
     }
@@ -42,8 +42,24 @@ class ServerDefaultsTest {
             ServerDefaults.resolve(ServerDefaults.MAP_URL, false, false))
         assertEquals(ServerDefaults.MAP_URL,
             ServerDefaults.resolve(ServerDefaults.MAP_URL, false, true))
-        assertEquals(ServerDefaults.MAP_URL,
+        assertEquals(ServerDefaults.LEGACY_URL,
             ServerDefaults.resolve(ServerDefaults.MAP_URL, true, false))
+    }
+
+    @Test fun knownTestServerCanNeverTrapAnInactivePhoneOnOldBackend() {
+        for (server in listOf(ServerDefaults.CONVOY_URL, ServerDefaults.RADIO_URL, ServerDefaults.MAP_URL)) {
+            assertEquals(ServerDefaults.LEGACY_URL,
+                ServerDefaults.resolve(server, manuallyConfigured = true, hasActiveSession = false))
+            assertEquals(server,
+                ServerDefaults.resolve(server, manuallyConfigured = true, hasActiveSession = true))
+        }
+    }
+
+    @Test fun aCustomRelayIsNotSilentlyReplaced() {
+        for (server in listOf("http://192.168.1.10:8080", "https://private-convoy.example")) {
+            assertEquals(server, ServerDefaults.resolve(server, true, false))
+            assertEquals(server, ServerDefaults.resolve(server, false, false))
+        }
     }
 
     @Test fun configuredServerRejectsPublicCleartextAndEmbeddedCredentials() {
@@ -76,8 +92,8 @@ class ServerDefaultsTest {
         val map = ServerDefaults.configuredRoot(ServerDefaults.MAP_URL)
         assertTrue("The radio and map beta URLs must not be mistaken as shared sessions",
             radio != map)
-        assertEquals(radio, ServerDefaults.resolve(radio, true, false))
-        assertEquals(map, ServerDefaults.resolve(map, true, false))
+        assertEquals(ServerDefaults.LEGACY_URL, ServerDefaults.resolve(radio, true, false))
+        assertEquals(ServerDefaults.LEGACY_URL, ServerDefaults.resolve(map, true, false))
         assertEquals(radio, ServerDefaults.resolve(radio, false, true))
     }
 

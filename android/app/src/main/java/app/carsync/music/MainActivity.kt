@@ -416,7 +416,7 @@ private val pages = listOf("Home", "Music Library", "Playlists", "Create Session
                     "Settings" -> {
                         if (!s.driving) LargeButton("About CarSync Music") { page = "About" }
                         if (!s.driving) {
-                            Text("Internet convoy: cars anywhere with mobile data use the saved cloud server. Local Wi-Fi discovery only searches for a separately running laptop relay; it cannot find cars.", color = Muted)
+                            Text("The CarSync production cloud server is included automatically. Just create or join a session; no URL setup is needed. Optional local Wi-Fi relay discovery requires a separately running server.", color = Muted)
                             LargeButton(if (s.localSearchActive) "Searching local Wi-Fi…" else "Find local Wi-Fi relay (optional)", !s.localSearchActive) { sync.beginDiscovery() }
                             if (s.localSearchStatus.isNotBlank()) Text(s.localSearchStatus, color = Muted)
                             if (s.localSearchActive) LargeButton("Stop Wi-Fi relay scan") { sync.stopDiscovery() }
@@ -451,12 +451,19 @@ private val pages = listOf("Home", "Music Library", "Playlists", "Create Session
                         Text("Playback: ${s.syncCorrectionStatus}", color = Muted, fontSize = 12.sp)
                         Text("Unexpected rebuffer events: ${s.audioRebuffers} · large sync recoveries: ${s.syncHardSeeks}", color = if (s.audioRebuffers > 0 || s.syncHardSeeks > 1) Color(0xFFFFBF7A) else Accent, fontSize = 12.sp)
                         Text("If a song scratches, check whether rebuffer events increase. Compare local MP3 playback with internet-shared audio and try the normal audio route with Bluetooth call mode OFF.", color = Muted, fontSize = 12.sp)
-                        Title("Setup & playback", "Use HTTPS for mobile data. Use a private Wi-Fi server address on a shared hotspot.")
+                        Title("Setup & playback", "The CarSync cloud server is built in. Custom servers are optional, and private LAN relays remain supported.")
                         SettingToggle("Driving mode", s.driving, "Hides library, session setup and complex controls. Park before disabling; automatic vehicle-speed detection is unavailable.") { sync.driving(it); if (it) page = "Now Playing" }
                         if (!s.driving) {
-                            OutlinedTextField(endpoint, { endpoint = it }, label = { Text("Server · https://music.example.com") }, modifier = Modifier.fillMaxWidth())
+                            Text("Automatic server: ${ServerDefaults.LEGACY_URL}", color = Accent, fontSize = 13.sp)
+                            LargeButton("Use automatic CarSync server", s.code.isBlank()) {
+                                try { sync.useAutomaticServer() } catch (e: Exception) {
+                                    sync.message(e.message ?: "Leave the current session first.")
+                                }
+                            }
+                            if (s.code.isNotBlank()) Text("Leave your current session before changing servers. Active session codes do not transfer.", color = Muted, fontSize = 12.sp)
+                            OutlinedTextField(endpoint, { endpoint = it }, label = { Text("Custom server (optional, advanced)") }, modifier = Modifier.fillMaxWidth())
                             OutlinedTextField(carName, { carName = it }, label = { Text("Car name") }, modifier = Modifier.fillMaxWidth())
-                            LargeButton("Save server & car name", s.code.isBlank()) { try { sync.configure(endpoint, carName) } catch (e: Exception) { sync.message(e.message ?: "Invalid server") } }
+                            LargeButton("Save custom server & car name", s.code.isBlank()) { try { sync.configure(endpoint, carName) } catch (e: Exception) { sync.message(e.message ?: "Invalid server") } }
                             OutlinedTextField(latency, { latency = it.filter(Char::isDigit).take(4) }, label = { Text("Local output latency compensation · 0–2000 ms") }, modifier = Modifier.fillMaxWidth())
                             LargeButton("Save calibration") { sync.latency(latency.toLongOrNull() ?: 0) }
                             LargeButton("Automatic acoustic check · 3 tones (parked)", !s.busy && !s.driving && !s.playing && s.speakerId == null && !s.talkPending) {
@@ -525,13 +532,13 @@ private val pages = listOf("Home", "Music Library", "Playlists", "Create Session
             Text(when {
                 s.talkPending -> "Requesting the microphone…"
                 !s.connected -> "Connect both cars to use Talk & Listen"
-                !s.supportsVoice -> "Server does not support the intercom. Use the convoy test server."
+                !s.supportsVoice -> "This server does not support the intercom. Leave and choose the automatic CarSync cloud server."
                 isSpeaking -> "You are talking · other cars are listening"
                 anotherSpeaker -> "Listening · another car has the microphone"
                 else -> "Ready to talk · both host and guests can speak"
             }, color = if (s.connected && s.supportsVoice) Accent else Color(0xFFFFBF7A))
             if (!s.connected) LargeButton("Create or join a session") { openSession() }
-            else if (!s.supportsVoice) Text("Update the server address in Settings, then reconnect.", color = Muted)
+            else if (!s.supportsVoice) Text("Leave this session, select Use automatic CarSync server in Settings, and create or join a new session.", color = Muted)
             Row(horizontalArrangement = Arrangement.spacedBy(10.dp), modifier = Modifier.fillMaxWidth()) {
                 Box(Modifier.weight(1f)) {
                     LargeButton("Start talking", s.connected && s.supportsVoice && s.speakerId == null && !s.talkPending) {

@@ -399,6 +399,23 @@ class SyncCoordinator(private val context: Context, val dao: LibraryDao, prefere
         val clean = ServerDefaults.configuredRoot(endpoint)
         prefs.edit().putString("endpoint", clean).putBoolean("manualServer", true).putString("name", name.take(40)).apply(); update { it.copy(endpoint = clean, carName = name.take(40)) }
     }
+    /**
+     * One-tap connection to the bundled HTTPS convoy backend. This only affects
+     * future sessions; never move live session credentials between servers.
+     */
+    fun useAutomaticServer() {
+        require(!state.value.connected && state.value.code.isBlank()) {
+            "Leave the current session before switching servers."
+        }
+        prefs.edit()
+            .putString("endpoint", ServerDefaults.LEGACY_URL)
+            .putBoolean("manualServer", false)
+            .apply()
+        update {
+            it.copy(endpoint = ServerDefaults.LEGACY_URL,
+                message = "CarSync cloud server selected automatically. Create or join a new session.")
+        }
+    }
     fun create() = establish(null)
     fun join(code: String) = establish(code)
     private fun establish(code: String?) {
@@ -541,7 +558,7 @@ class SyncCoordinator(private val context: Context, val dao: LibraryDao, prefere
                     toggleRadar(true)
                 }
                 if (!wasConnected && "convoy_ptt_pcm16_v1" !in advertised) {
-                    message("Connected to an older server: intercom, GPS, voting and guest songs need the v1.7 backend.")
+                    message("This server is outdated. Leave this session and tap Use automatic CarSync server in Settings.")
                 }
                 previous = x.optJSONObject("previous")?.let(::frame)
                 val f = frame(x.getJSONObject("frame"))
