@@ -33,8 +33,14 @@ object ServerDefaults {
 
     fun resolve(saved: String?, manuallyConfigured: Boolean, hasActiveSession: Boolean): String {
         val value = saved?.trim()?.trimEnd('/').orEmpty()
+        // An existing session is tied to its original backend, including its credentials.
         if (hasActiveSession) return value.ifBlank { LEGACY_URL }
-        if (manuallyConfigured && value.isNotBlank()) return value
-        return if (value.isBlank() || value in setOf(LEGACY_URL, CONVOY_URL, RADIO_URL, MAP_URL)) LEGACY_URL else value
+        // Older official beta servers are separate, temporary sessions. Once the user
+        // leaves, migrate automatically even if a previous app asked them to save a
+        // test URL manually. Never overwrite a truly custom LAN or HTTPS relay.
+        if (value.isBlank() || value in setOf(LEGACY_URL, CONVOY_URL, RADIO_URL, MAP_URL)) return LEGACY_URL
+        if (manuallyConfigured) return value
+        // A discovered LAN relay can also be restored without enabling Bluetooth.
+        return value
     }
 }
