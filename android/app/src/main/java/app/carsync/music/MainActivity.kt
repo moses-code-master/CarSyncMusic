@@ -124,7 +124,7 @@ private val pages = listOf("Home", "Music Library", "Playlists", "Create Session
                         .postDelayed({ sync.pttRequest() }, 350)
                     VoiceAction.STOP_TALK -> sync.pttRelease()
                     VoiceAction.SHOW_CARS -> { page = "Connected Cars"; showVoiceDialog = false }
-                    VoiceAction.SHOW_MAP -> { page = "Live Map"; showVoiceDialog = false }
+                    VoiceAction.SHOW_MAP -> { page = "Connected Cars"; showVoiceDialog = false }
                     VoiceAction.SHOW_PLAYER -> { page = "Now Playing"; showVoiceDialog = false }
                     VoiceAction.CALIBRATE -> android.os.Handler(android.os.Looper.getMainLooper())
                         .postDelayed({ sync.measureAcoustics() }, 350)
@@ -274,7 +274,7 @@ private val pages = listOf("Home", "Music Library", "Playlists", "Create Session
                                 else microphoneRequest.launch(Manifest.permission.RECORD_AUDIO)
                             },
                             onSession = { page = "Create Session" },
-                            onMap = { page = "Live Map" },
+                            onMap = { page = "Connected Cars" },
                             onPlaylist = { page = if (s.connected) "Now Playing" else "Music Library" },
                             onCars = { page = "Connected Cars" },
                             onPlayer = { page = "Now Playing" },
