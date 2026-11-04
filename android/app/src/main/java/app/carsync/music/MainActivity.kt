@@ -254,7 +254,8 @@ private val pages = listOf("Home", "Music Library", "Playlists", "Create Session
         }, bottomBar = {
             Column(Modifier.fillMaxWidth().background(Panel)) {
                 if (s.busy) LinearProgressIndicator(Modifier.fillMaxWidth())
-                Text(s.message, color = if (s.audioError.isNotBlank()) Color(0xFFFFB19F) else Muted, fontSize = if (page == "Home") 11.sp else 13.sp, maxLines = if (page == "Home") 1 else 3, overflow = TextOverflow.Ellipsis, modifier = Modifier.padding(horizontal = 16.dp, vertical = if (page == "Home") 4.dp else 8.dp))
+                Text(s.uploadProgress.ifBlank { s.message }, color = if (s.audioError.isNotBlank()) Color(0xFFFFB19F) else Muted, fontSize = if (page == "Home") 11.sp else 13.sp, maxLines = if (page == "Home") 1 else 3, overflow = TextOverflow.Ellipsis, modifier = Modifier.padding(horizontal = 16.dp, vertical = if (page == "Home") 4.dp else 8.dp))
+                if (s.pendingGuestSong.isNotBlank() && !s.busy && s.connected) TextButton(onClick = { sync.retryGuestUpload() }) { Text("Retry upload") }
                 NavigationBar(containerColor = Color(0xFF10171F)) {
                     val nav = listOf("Home" to Icons.Default.Home, "Music Library" to Icons.Default.List, "Videos" to Icons.Default.PlayArrow, "Now Playing" to Icons.Default.PlayArrow, "Create Session" to Icons.Default.Share, "Settings" to Icons.Default.Settings)
                     val labels = mapOf("Home" to "Home", "Music Library" to "Library", "Videos" to "Videos", "Now Playing" to "Player", "Create Session" to "Session", "Settings" to "Settings")
@@ -563,7 +564,10 @@ private val pages = listOf("Home", "Music Library", "Playlists", "Create Session
         if (!s.sharing) {
             Text("Share this playlist with all guests. Each song uploads once; guests without matching local files can stream it. Enable only for MP3s you have permission to share.", color = Muted)
             LargeButton("Share music with guests", !s.busy) { sync.settings(sharing = true) }
-        } else Text(if (s.busy) "Preparing shared music for all guests…" else "Audio sharing enabled for all guests · new playlist songs upload automatically", color = Accent)
+        } else {
+            Text(s.uploadProgress.ifBlank { if (s.busy) "Preparing shared music for all guests…" else "Audio sharing enabled for all guests · new playlist songs upload automatically" }, color = Accent)
+            if (!s.busy && s.queue.any { it.mediaType == "audio" && it.hash !in s.audioAvailable }) LargeButton("Retry upload", s.connected) { sync.uploadMissingAudio() }
+        }
     }
     if (s.role == "guest" && s.missing) Text(if (t.mediaType == "video") s.message else if (s.sharing) "Waiting for music from the host. Playback starts automatically when ready." else "Controls are connected. Ask the host to tap Share music with guests to hear this song.", color = Accent)
     if (t.mediaType == "video") { VideoPanel(s, sync); PlaybackControls(s, sync) }

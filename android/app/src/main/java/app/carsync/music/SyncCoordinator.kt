@@ -2,6 +2,11 @@ package app.carsync.music
 
 import android.content.Context
 import android.net.Uri
+import android.net.ConnectivityManager
+import android.net.Network
+import android.net.NetworkCapabilities
+import android.net.NetworkRequest
+import android.os.Build
 import android.os.SystemClock
 import androidx.media3.common.*
 import androidx.media3.exoplayer.ExoPlayer
@@ -26,7 +31,7 @@ data class AppState(
     val index: Int = 0, val positionMs: Long = 0, val playing: Boolean = false, val buffering: Boolean = false, val missing: Boolean = false,
     val clockReady: Boolean = false, val driftMs: Long? = null, val rttMs: Long = 0, val volume: Float = 0.8f,
     val guestControls: Boolean = false, val sharing: Boolean = false, val guestAdditions: Boolean = false, val serverFeatures: Set<String> = emptySet(), val pendingGuestSong: String = "", val pendingGuestSongs: List<String> = emptyList(), val audioAvailable: Set<String> = emptySet(), val audioManifestKnown: Boolean = false, val repeat: String = "off", val driving: Boolean = false,
-    val latencyMs: Long = 0, val message: String = "Import MP3s and create or join a session.", val busy: Boolean = false,
+    val uploadProgress: String = "", val latencyMs: Long = 0, val message: String = "Import MP3s and create or join a session.", val busy: Boolean = false,
     val invitationCode: String = "", val invitationServer: String = "", val serviceReady: Boolean = false, val requestedPlaying: Boolean = false, val audioError: String = "",
     val parkedConfirmed: Boolean = false, val audioOnlyVideo: Boolean = false, val automotive: Boolean = false, val vehicleKnown: Boolean = false, val vehicleRestricted: Boolean = false, val mediaProtocol: Int = 1, val syncCorrectionStatus: String = "Steady", val syncHardSeeks: Int = 0, val audioRebuffers: Int = 0, val preferBluetoothRadio: Boolean = false, val radioStatus: String = "Waiting for a radio connection", val acousticProbeMs: Long? = null, val acousticVariationMs: Long? = null, val acousticProfileReliable: Boolean = false
 ) {
@@ -232,6 +237,9 @@ class SyncCoordinator(private val context: Context, val dao: LibraryDao, prefere
             return
         }
         update { it.copy(pendingGuestSong = next, pendingGuestSongs = it.pendingGuestSongs.drop(1)) }
+        requestGuestUpload(t)
+    }
+    private fun requestGuestUpload(t: Track) {
         val data = JSONObject().put("hash", t.hash).put("title", t.title)
             .put("artist", t.artist).put("album", t.album)
             .put("durationMs", t.durationMs).put("mediaType", t.mediaType)
@@ -240,42 +248,33 @@ class SyncCoordinator(private val context: Context, val dao: LibraryDao, prefere
         send(JSONObject().put("type", "guest_add").put("track", data))
         message("Requesting upload: ${t.title}")
     }
+    fun retryGuestUpload() {
+        val s = state.value
+        if (!s.connected || s.busy || !s.sharing || !s.guestAdditions || s.pendingGuestSong.isBlank()) return
+        val t = s.library.find { it.hash == s.pendingGuestSong } ?: return
+        if (s.queue.any { it.hash == t.hash }) uploadGuestSong(t.hash) else requestGuestUpload(t)
+    }
     private fun uploadGuestSong(hash: String) {
         val state = state.value
+        if (state.busy || uploadJob?.isActive == true) return
         val track = state.library.find { it.hash == hash } ?: run { message("Media missing from device."); return }
-        scope.launch {
-            update { it.copy(busy = true) }
+        val uploadToken = bearer
+        update { it.copy(busy = true, uploadProgress = "Preparing media upload…") }
+        uploadJob = scope.launch {
+            var success = false
             try {
                 withContext(Dispatchers.IO) {
-                    val uri = Uri.parse(track.uri)
-                    val size = context.contentResolver.openAssetFileDescriptor(uri, "r")?.use { it.length } ?: -1L
-                    require(size in 1L..104857600L) { "File size unavailable or exceeds 100 MB" }
-                    val body = object : RequestBody() {
-                        override fun contentType() = track.mimeType.toMediaType()
-                        override fun contentLength(): Long = size
-                        override fun writeTo(sink: okio.BufferedSink) {
-                            context.contentResolver.openInputStream(uri)?.use { input ->
-                                val buffer = ByteArray(65536)
-                                while (true) {
-                                    val n = input.read(buffer)
-                                    if (n < 0) break
-                                    sink.write(buffer, 0, n)
-                                }
-                            } ?: throw IOException("Media file is no longer readable")
-                        }
-                    }
-                    val route = if (track.mediaType == "video") "video" else "audio"
-                    val request = Request.Builder().url("${state.endpoint}/sessions/${state.code}/$route/$hash")
-                        .header("Authorization", "Bearer $bearer").put(body).build()
-                    http.newCall(request).execute().use { response ->
-                        if (!response.isSuccessful) error(JSONObject(response.body?.string() ?: "{}").optString("error", "Upload rejected by server"))
-                    }
+                    uploadTrack(state, uploadToken, track)
                 }
+                success = true
                 message("Added ${track.title} to shared queue.")
-            } catch (e: Exception) { message("Media upload failed: ${e.message}") }
+            } catch (e: CancellationException) { throw e }
+            catch (e: Exception) { message("Upload paused: ${e.message}. Tap Retry upload.") }
             finally {
-                update { it.copy(busy = false, pendingGuestSong = "") }
-                requestNextGuestUpload()
+                if (this@SyncCoordinator.state.value.code == state.code && bearer == uploadToken) {
+                    update { it.copy(busy = false, uploadProgress = "", pendingGuestSong = if (success) "" else it.pendingGuestSong) }
+                    if (isActive && success) requestNextGuestUpload()
+                }
             }
         }
     }
@@ -322,6 +321,31 @@ class SyncCoordinator(private val context: Context, val dao: LibraryDao, prefere
     private var generation = 0
     private var attempts = 0
     private var reconnect: Job? = null
+    private var uploadJob: Job? = null
+    private var networkRecovery: Job? = null
+    private var validatedNetwork: Network? = null
+    private var hasConnected = false
+    private val connectivity = context.getSystemService(Context.CONNECTIVITY_SERVICE) as ConnectivityManager
+    private val networkCallback = object : ConnectivityManager.NetworkCallback() {
+        override fun onCapabilitiesChanged(network: Network, capabilities: NetworkCapabilities) {
+            if (!capabilities.hasCapability(NetworkCapabilities.NET_CAPABILITY_VALIDATED)) return
+            scope.launch {
+                if (connectivity.activeNetwork != network || validatedNetwork == network) return@launch
+                validatedNetwork = network
+                networkRecovery?.cancel()
+                networkRecovery = scope.launch {
+                    delay(350)
+                    if (bearer.isNotBlank() && player != null) {
+                        // The same cleanup as a dropped socket releases the microphone and
+                        // GPS foreground resources before restoring the existing session.
+                        if (state.value.connected) lost()
+                        attempts = 0; connect()
+                    }
+                }
+            }
+        }
+        override fun onLost(network: Network) { scope.launch { if (validatedNetwork == network) validatedNetwork = null } }
+    }
     private var loops: Job? = null
     private var scheduleJob: Job? = null
     private var player: ExoPlayer? = null
@@ -353,6 +377,8 @@ class SyncCoordinator(private val context: Context, val dao: LibraryDao, prefere
     init {
         // Existing v1.6 phones migrate off the old default unless they are still in
         // a session or have explicitly chosen a custom server.
+        if (Build.VERSION.SDK_INT >= 24) connectivity.registerDefaultNetworkCallback(networkCallback)
+        else connectivity.registerNetworkCallback(NetworkRequest.Builder().addCapability(NetworkCapabilities.NET_CAPABILITY_INTERNET).build(), networkCallback)
         if (prefs.getString("code", "").isNullOrBlank() &&
             prefs.getString("endpoint", null) != initialEndpoint) {
             prefs.edit().putString("endpoint", initialEndpoint).apply()
@@ -393,7 +419,7 @@ class SyncCoordinator(private val context: Context, val dao: LibraryDao, prefere
         loops?.cancel(); loops = scope.launch { while (isActive) { tick(); delay(250) } }
     }
     fun detach() { clearTalkRequest(); convoyAudio.close(); radar.stop(); discovery.stop(); ConvoyForeground.stopLocation(context); ConvoyForeground.stopMicrophone(context); player = null; preparedHash = ""; activeRevision = -1; discoveryTimeout?.cancel(); loops?.cancel(); scheduleJob?.cancel(); generation++; ws?.close(1000, "Service stopped"); ws = null; reconnect?.cancel(); update { it.copy(connected = false, playing = false, serviceReady = false) } }
-    fun shutdown() { detach(); vehicleSafety.close(); scope.cancel() }
+    fun shutdown() { detach(); connectivity.unregisterNetworkCallback(networkCallback); vehicleSafety.close(); scope.cancel() }
     fun configure(endpoint: String, name: String) {
         require(!state.value.connected && state.value.code.isBlank()) { "Leave the current session before changing the server" }
         val clean = ServerDefaults.configuredRoot(endpoint)
@@ -441,12 +467,12 @@ class SyncCoordinator(private val context: Context, val dao: LibraryDao, prefere
     }
     private fun connect() {
         if (bearer.isBlank() || player == null) return
-        reconnect?.cancel(); val gen = ++generation; clock.reset(); pings.clear(); activeRevision = -1
+        reconnect?.cancel(); scheduleJob?.cancel(); val gen = ++generation; clock.reset(); pings.clear(); activeRevision = -1
         update { it.copy(connected = false, clockReady = false, reconnectAttempt = attempts, message = if (attempts > 0) "Reconnecting to convoy server (attempt ${attempts + 1})…" else "Connecting…") }
         ws?.close(1000, "Reconnect")
         val url = state.value.endpoint.replaceFirst("https://", "wss://").replaceFirst("http://", "ws://") + "/ws"
         ws = http.newWebSocket(Request.Builder().url(url).build(), object : WebSocketListener() {
-            override fun onOpen(webSocket: WebSocket, response: Response) { webSocket.send(JSONObject().put("type", "auth").put("code", state.value.code).put("token", bearer).put("mediaCapabilities", JSONArray(listOf("audio", "video"))).put("voiceCodecs", JSONArray(listOf("mulaw16"))).toString()) }
+            override fun onOpen(webSocket: WebSocket, response: Response) { scope.launch { if (gen == generation && bearer.isNotBlank()) webSocket.send(JSONObject().put("type", "auth").put("code", state.value.code).put("token", bearer).put("mediaCapabilities", JSONArray(listOf("audio", "video"))).put("voiceCodecs", JSONArray(listOf("mulaw16"))).toString()) else webSocket.close(1000, "Superseded connection") } }
             override fun onMessage(webSocket: WebSocket, text: String) { scope.launch { if (gen == generation) try { receive(JSONObject(text)) } catch (e: Exception) { message("Invalid server message: ${e.message}") } } }
             override fun onFailure(webSocket: WebSocket, t: Throwable, response: Response?) { scope.launch { if (gen == generation) lost() } }
             override fun onClosing(webSocket: WebSocket, code: Int, reason: String) {
@@ -549,10 +575,16 @@ class SyncCoordinator(private val context: Context, val dao: LibraryDao, prefere
                 val wasConnected = state.value.connected
                 convoyAudio.setCompactVoice("convoy_ptt_mulaw_v1" in advertised)
                 val sharingRevoked = state.value.sharing && !x.getBoolean("sharing")
+                if (sharingRevoked || (!x.optBoolean("guestAdditions") && state.value.pendingGuestSong.isNotBlank())) {
+                    uploadJob?.cancel()
+                    update { it.copy(pendingGuestSong = "", pendingGuestSongs = emptyList()) }
+                }
                 val available = x.optJSONArray("audioAvailable")?.let { a -> (0 until a.length()).map { a.getString(it) }.toSet() } ?: emptySet()
                 val audioChanged = state.value.audioAvailable != available || state.value.sharing != x.getBoolean("sharing")
                 update { it.copy(connected = true, reconnectAttempt = 0, queue = queue, cars = cars, maxGuests = x.optInt("maxGuests", 1).coerceIn(1, 50), guestControls = x.getBoolean("guestControls"), guestAdditions = x.optBoolean("guestAdditions", false), serverFeatures = advertised,
-                    radioStatus = if ("convoy_ptt_mulaw_v1" in advertised) "Compact radio · G.711 16 kHz (half-size voice frames)" else "Compatible radio · PCM16 (uncompressed)", speakerId = if (x.isNull("speakerId")) null else x.optString("speakerId").takeIf { name -> name.isNotBlank() && name != "null" }, votes = x.optJSONObject("votes")?.let { obj -> obj.keys().asSequence().associateWith { key -> obj.optInt(key) } } ?: emptyMap(), sharing = x.getBoolean("sharing"), audioAvailable = available, audioManifestKnown = x.has("audioAvailable"), mediaProtocol = x.optInt("mediaProtocol", 1), repeat = x.getString("repeat"), message = if (!wasConnected) "Session connected. Matching clocks…" else it.message) }
+                    radioStatus = if ("convoy_ptt_mulaw_v1" in advertised) "Compact radio · G.711 16 kHz (half-size voice frames)" else "Compatible radio · PCM16 (uncompressed)", speakerId = if (x.isNull("speakerId")) null else x.optString("speakerId").takeIf { name -> name.isNotBlank() && name != "null" }, votes = x.optJSONObject("votes")?.let { obj -> obj.keys().asSequence().associateWith { key -> obj.optInt(key) } } ?: emptyMap(), sharing = x.getBoolean("sharing"), audioAvailable = available, audioManifestKnown = x.has("audioAvailable"), mediaProtocol = x.optInt("mediaProtocol", 1), repeat = x.getString("repeat"), message = if (!wasConnected) { if (hasConnected) "Session reconnected. Restoring playback…" else "Session connected. Matching clocks…" } else it.message) }
+                hasConnected = true
+                if (!wasConnected && state.value.pendingGuestSong.isNotBlank() && !state.value.busy) retryGuestUpload()
                 if (!wasConnected && locationConsentForCurrentSession &&
                     "convoy_location_v1" in advertised && !state.value.radarEnabled) {
                     toggleRadar(true)
@@ -804,34 +836,50 @@ class SyncCoordinator(private val context: Context, val dao: LibraryDao, prefere
     fun uploadMissingAudio() {
         val s = state.value
         if (s.busy || !s.sharing || s.role != "host" || !s.connected) return
-        scope.launch {
-            update { it.copy(busy = true) }
+        val uploadToken = bearer
+        update { it.copy(busy = true, uploadProgress = "Preparing music upload…") }
+        uploadJob = scope.launch {
             try {
                 withContext(Dispatchers.IO) {
+                    // A reconnect may arrive before the library UI finishes loading.
+                    val uploadLibrary = dao.tracks()
                     for (remote in s.queue.distinctBy { it.hash }) {
+                        ensureActive()
                         if (remote.mediaType == "video") continue
                         if (remote.hash in s.audioAvailable) continue
-                        val t = s.library.find { it.hash == remote.hash } ?: continue
-                        val uri = Uri.parse(t.uri)
-                        val size = context.contentResolver.openAssetFileDescriptor(uri, "r")?.use { it.length } ?: -1
-                        require(size in 1..104857600) { "Track size unknown or above 100 MB. Copy it to internal storage and import again." }
-                        val body = object : RequestBody() {
-                            override fun contentType() = "audio/mpeg".toMediaType()
-                            override fun contentLength() = size
-                            override fun writeTo(sink: okio.BufferedSink) { context.contentResolver.openInputStream(uri)?.use { input -> val buf = ByteArray(65536); while (true) { val n = input.read(buf); if (n < 0) break; sink.write(buf, 0, n) } } ?: throw IOException("Storage unavailable") }
-                        }
-                        val req = Request.Builder().url("${s.endpoint}/sessions/${s.code}/audio/${t.hash}").header("Authorization", "Bearer $bearer").put(body).build()
-                        http.newCall(req).execute().use { response -> if (!response.isSuccessful) error(JSONObject(response.body?.string() ?: "{}").optString("error", "Upload failed")) }
-                        withContext(Dispatchers.Main) { message("Uploaded ${t.title}") }
+                        val t = uploadLibrary.find { it.hash == remote.hash } ?: continue
+                        uploadTrack(s, uploadToken, t)
                     }
                 }
                 message("Audio relay ready. All guests start automatically.")
-            } catch (e: Exception) { message(e.message ?: "Upload failed") }
+            } catch (e: CancellationException) { throw e }
+            catch (e: Exception) { message(e.message ?: "Upload failed") }
             finally {
-                update { it.copy(busy = false) }
-                if (state.value.queue.map { it.hash } != s.queue.map { it.hash }) uploadMissingAudio()
+                if (state.value.code == s.code && bearer == uploadToken) {
+                    update { it.copy(busy = false, uploadProgress = "") }
+                    if (isActive && state.value.queue.map { it.hash } != s.queue.map { it.hash }) uploadMissingAudio()
+                }
             }
         }
+    }
+    private suspend fun uploadTrack(session: AppState, token: String, track: Track) {
+        val uri = Uri.parse(track.uri)
+        val size = context.contentResolver.openAssetFileDescriptor(uri, "r")?.use { it.length } ?: -1L
+        require(size in 1L..104857600L) { "Track size unavailable or above 100 MB. Import it again." }
+        val route = if (track.mediaType == "video") "video" else "audio"
+        val url = "${session.endpoint}/sessions/${session.code}/$route/${track.hash}"
+        var percent = -1
+        val progress: (Long, Int) -> Unit = { bytes, retry ->
+            val next = if (bytes >= 0) (bytes * 100 / size).toInt() else percent.coerceAtLeast(0)
+            if (next != percent || retry > 0) {
+                percent = next
+                scope.launch { if (state.value.code == session.code && bearer == token) update { it.copy(uploadProgress = "$next% · ${track.title}" + if (retry > 0) " · retry $retry/6…" else "") } }
+            }
+        }
+        val open = { context.contentResolver.openInputStream(uri) ?: throw IOException("Storage unavailable") }
+        val uploader = ResumableUploader(http)
+        if ("resumable_media_upload_v1" in session.serverFeatures) uploader.upload(url, token, size, open, progress)
+        else uploader.uploadLegacy(url, token, size, track.mimeType, open, progress)
     }
     fun retryAudio() {
         preparedHash = ""
@@ -854,13 +902,13 @@ class SyncCoordinator(private val context: Context, val dao: LibraryDao, prefere
     fun audioToken() = bearer
     fun resume() { if (bearer.isNotBlank() && !state.value.connected) connect() }
     fun leave(clearMessage: Boolean = true) { locationConsentForCurrentSession = false; convoyAudio.close(); radar.stop(); ConvoyForeground.stopLocation(context); ConvoyForeground.stopMicrophone(context);
-        generation++; reconnect?.cancel(); ws?.close(1000, "Left session"); ws = null; scheduleJob?.cancel(); player?.pause(); player?.clearMediaItems(); preparedHash = ""; desired = null; activeRevision = -1; bearer = ""
+        uploadJob?.cancel(); networkRecovery?.cancel(); hasConnected = false; generation++; reconnect?.cancel(); ws?.close(1000, "Left session"); ws = null; scheduleJob?.cancel(); player?.pause(); player?.clearMediaItems(); preparedHash = ""; desired = null; activeRevision = -1; bearer = ""
         val nextEndpoint = ServerDefaults.resolve(
             state.value.endpoint, prefs.getBoolean("manualServer", false), false
         )
         prefs.edit().remove("token").remove("code").remove("role").remove("memberId")
             .putString("endpoint", nextEndpoint).apply()
-        update { it.copy(endpoint = nextEndpoint, code = "", role = "", memberId = "", radarEnabled = false, speakerId = null, serverFeatures = emptySet(), radioStatus = "Waiting for a radio connection", guestAdditions = false, pendingGuestSong = "", pendingGuestSongs = emptyList(), connected = false, queue = emptyList(), cars = emptyList(), clockReady = false, driftMs = null, requestedPlaying = false, audioError = "", message = if (clearMessage) "Session left. The host can create a new session for the group." else it.message) }
+        update { it.copy(endpoint = nextEndpoint, code = "", role = "", memberId = "", radarEnabled = false, speakerId = null, serverFeatures = emptySet(), radioStatus = "Waiting for a radio connection", guestAdditions = false, pendingGuestSong = "", pendingGuestSongs = emptyList(), busy = false, uploadProgress = "", connected = false, queue = emptyList(), cars = emptyList(), clockReady = false, driftMs = null, requestedPlaying = false, audioError = "", message = if (clearMessage) "Session left. The host can create a new session for the group." else it.message) }
     }
     fun endSession() { scope.launch { try { withContext(Dispatchers.IO) { request("/sessions/${state.value.code}", "DELETE") }; leave() } catch (e: Exception) { message(e.message ?: "Could not end session") } } }
 }

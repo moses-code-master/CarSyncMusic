@@ -3,7 +3,7 @@ import { encodeMulaw, decodeMulaw } from './voice-codec.mjs';
 import { recentLocation } from './location-policy.mjs';
 import { WebSocketServer, WebSocket } from 'ws';
 import { DatabaseSync } from 'node:sqlite';
-import { mkdirSync, existsSync, statSync, createReadStream, createWriteStream, unlinkSync, renameSync, readdirSync } from 'node:fs';
+import { mkdirSync, existsSync, statSync, createReadStream, createWriteStream, unlinkSync, renameSync, readdirSync, truncateSync, appendFileSync, readFileSync } from 'node:fs';
 import { join } from 'node:path';
 import { pipeline } from 'node:stream/promises';
 import { Transform } from 'node:stream';
@@ -23,7 +23,7 @@ export function createServer({ dataDir = process.env.DATA_DIR || './data', port 
   const metric = (s, m, event, status = {}) => { if (!closing) db.prepare('INSERT INTO telemetry VALUES(?,?,?,?,?,?,?,?)').run(s.code, m.id, now(), event, status.driftMs ?? null, status.rttMs ?? null, status.buffered ? 1 : 0, status.missing ? 1 : 0); };
   const sessions = new Map(), peers = new Map(), rates = new Map();
   const guestReservations = new Map(); // Session-scoped upload grants expire after 5 minutes.
-  const capabilities = ['convoy_ptt_mulaw_v1', 'convoy_ptt_pcm16_v1', 'convoy_location_v1', 'convoy_votes_v1', 'guest_music_upload_v1', 'guest_media_batch_v1', 'guest_video_mp4_v1'];
+  const capabilities = ['convoy_ptt_mulaw_v1', 'convoy_ptt_pcm16_v1', 'convoy_location_v1', 'convoy_votes_v1', 'guest_music_upload_v1', 'guest_media_batch_v1', 'guest_video_mp4_v1', 'resumable_media_upload_v1'];
   // Ephemeral voice floor and position data never enter the session database.
   const floors = new Map(), frameRates = new Map();
   const announce = (session, payload, exceptId = null) => {
@@ -146,7 +146,8 @@ export function createServer({ dataDir = process.env.DATA_DIR || './data', port 
         if (!s.sharing) return fail(res, 403, 'Host has not permitted media sharing');
         const reservedKey = c + ':' + hash;
         const reservation = guestReservations.get(reservedKey);
-        const guestAuthorized = req.method === 'PUT' && s.guestAdditions && reservation &&
+        const uploadStatus = req.method === 'GET' && new URL(req.url, 'http://local').searchParams.has('upload');
+        const guestAuthorized = (['PUT', 'PATCH'].includes(req.method) || uploadStatus) && s.guestAdditions && reservation &&
           reservation.memberId === member.id && reservation.expiresAt > now();
         const listedTrack = s.playlist.find(t => t.hash === hash);
         if (!listedTrack && !guestAuthorized) return fail(res, 404, 'Track is not approved for this session');
@@ -154,10 +155,77 @@ export function createServer({ dataDir = process.env.DATA_DIR || './data', port 
         if ((route === 'video') !== (t.mediaType === 'video')) return fail(res, 415, 'Media route does not match track');
         if (t.mediaType === 'video' && t.mimeType !== 'video/mp4') return fail(res, 415, 'Only MP4 video relay supported');
         const file = join(dataDir, mediaName(c,t));
+        const partial = `${file}.part`;
+        const authorizeUpload = () => {
+          if (!sessions.has(c) || !s.sharing) throw Error('Sharing revoked during upload');
+          if (guestAuthorized) {
+            if (!s.guestAdditions || guestReservations.get(reservedKey) !== reservation || reservation.expiresAt <= now()) throw Error('Guest upload permission expired');
+            if (!s.playlist.some(track => track.hash === hash) && s.playlist.length >= 500) throw Error('Playlist is full');
+          } else if (member.role !== 'host' || !s.playlist.some(track => track.hash === hash)) throw Error('Upload permission revoked');
+        };
+        const publish = source => {
+          authorizeUpload(); if (source !== file) renameSync(source, file);
+          if (guestAuthorized) {
+            guestReservations.delete(reservedKey);
+            if (!s.playlist.some(track => track.hash === hash)) { s.playlist.push(reservation.track); save(s); }
+          }
+          if (existsSync(partial)) unlinkSync(partial);
+          broadcast(s);
+        };
+        if (uploadStatus) {
+          // Completed media is session-readable; partial offsets require upload permission.
+          if (member.role !== 'host' && !guestAuthorized && !existsSync(file)) return fail(res, 403, 'Upload permission required');
+          if (uploads.has(file)) return fail(res, 409, 'This track is already uploading');
+          if (guestAuthorized && existsSync(file) && !listedTrack) publish(file);
+          const expected = Number(new URL(req.url, 'http://local').searchParams.get('size'));
+          if (!existsSync(file) && existsSync(partial) && expected > 0 && expected <= 100 * 1024 ** 2 && statSync(partial).size === expected) {
+            authorizeUpload(); uploads.add(file);
+            try {
+              const sha = createHash('sha256');
+              for await (const chunk of createReadStream(partial)) sha.update(chunk);
+              authorizeUpload();
+              if (sha.digest('hex') === hash) publish(partial); else unlinkSync(partial);
+            } finally { uploads.delete(file); }
+          }
+          res.setHeader('Content-Type', 'application/json');
+          res.end(JSON.stringify({ offset: existsSync(file) ? statSync(file).size : existsSync(partial) ? statSync(partial).size : 0, complete: existsSync(file) })); return;
+        }
+        if (req.method === 'PATCH' && (member.role === 'host' || guestAuthorized)) {
+          const range = req.headers['content-range']?.match(/^bytes (\d+)-(\d+)\/(\d+)$/);
+          if (!range) return fail(res, 400, 'Content-Range required');
+          const [start, end, total] = range.slice(1).map(Number), length = end - start + 1;
+          if (![start,end,total].every(Number.isSafeInteger) || start < 0 || end < start || end >= total || total > 100 * 1024 ** 2 || length > 1024 ** 2 || Number(req.headers['content-length']) !== length) return fail(res, 413, 'Invalid chunk or media size');
+          if (guestAuthorized && reservation.track.sizeBytes && reservation.track.sizeBytes !== total) return fail(res, 400, 'Media size differs from approved track');
+          if (uploads.has(file)) return fail(res, 409, 'This track is already uploading');
+          if (existsSync(file)) { if (guestAuthorized && !listedTrack) publish(file); res.setHeader('Content-Type', 'application/json'); res.end(JSON.stringify({ offset: statSync(file).size, complete: true })); return; }
+          authorizeUpload();
+          const offset = existsSync(partial) ? statSync(partial).size : 0;
+          if (start !== offset) return fail(res, 409, 'Upload offset changed; request upload status');
+          const used = readdirSync(dataDir).filter(f => /\.(mp3|mp4|part)$/.test(f)).reduce((n, f) => n + statSync(join(dataDir, f)).size, 0);
+          if (used + reservedBytes + length > 2 * 1024 ** 3) return fail(res, 507, 'Relay storage is full');
+          uploads.add(file); reservedBytes += length;
+          const chunkFile = join(dataDir, `${c}-${hash}.${token()}.tmp`); let bytes = 0;
+          try {
+            await pipeline(req, new Transform({ transform(chunk, enc, cb) { bytes += chunk.length; cb(bytes > length ? Error('Size exceeded') : null, chunk); } }), createWriteStream(chunkFile));
+            if (bytes !== length) throw Error('Incomplete chunk');
+            authorizeUpload(); appendFileSync(partial, readFileSync(chunkFile), { flush: true });
+            const complete = end + 1 === total;
+            if (complete) {
+              const sha = createHash('sha256'); for await (const chunk of createReadStream(partial)) sha.update(chunk);
+              if (sha.digest('hex') !== hash) { unlinkSync(partial); throw Error('Media hash mismatch; upload reset'); }
+              publish(partial);
+            } else if (guestAuthorized) reservation.expiresAt = now() + 300000;
+            res.setHeader('Content-Type', 'application/json'); res.end(JSON.stringify({ offset: end + 1, complete }));
+          } catch (e) {
+            if (existsSync(partial)) { if (!sessions.has(c) || !s.sharing) unlinkSync(partial); else truncateSync(partial, offset); }
+            throw e;
+          } finally { if (existsSync(chunkFile)) unlinkSync(chunkFile); uploads.delete(file); reservedBytes -= length; }
+          return;
+        }
         if (req.method === 'PUT' && (member.role === 'host' || guestAuthorized)) {
           const length = Number(req.headers['content-length']);
           if (!Number.isSafeInteger(length) || length <= 0 || length > 100 * 1024 * 1024) return fail(res, 413, 'Media file limit is 100 MB');
-          const used = readdirSync(dataDir).filter(f => f.endsWith('.mp3') || f.endsWith('.mp4')).reduce((n, f) => n + statSync(join(dataDir, f)).size, 0);
+          const used = readdirSync(dataDir).filter(f => /\.(mp3|mp4|part)$/.test(f)).reduce((n, f) => n + statSync(join(dataDir, f)).size, 0);
           if (used + reservedBytes + length > 2 * 1024 ** 3) return fail(res, 507, 'Relay storage is full');
           if (uploads.has(file)) return fail(res, 409, 'This track is already uploading');
           uploads.add(file); reservedBytes += length;
@@ -165,18 +233,7 @@ export function createServer({ dataDir = process.env.DATA_DIR || './data', port 
           try {
             await pipeline(req, new Transform({ transform(chunk, enc, cb) { bytes += chunk.length; if (bytes > length) return cb(Error('Size exceeded')); sha.update(chunk); cb(null, chunk); } }), createWriteStream(tmp));
             if (bytes !== length || sha.digest('hex') !== hash) throw Error('Media size or hash mismatch');
-            if (!sessions.has(c) || !s.sharing) throw Error('Sharing revoked during upload');
-            if (guestAuthorized && (!s.guestAdditions || guestReservations.get(reservedKey) !== reservation || reservation.expiresAt <= now())) throw Error('Guest upload permission expired');
-            renameSync(tmp, file);
-            if (guestAuthorized) {
-              guestReservations.delete(reservedKey);
-              if (!s.playlist.some(t => t.hash === hash)) {
-                if (s.playlist.length >= 500) throw Error('Playlist is full');
-                s.playlist.push(reservation.track);
-                save(s);
-              }
-            }
-            res.end('{"ok":true}'); broadcast(s);
+            publish(tmp); res.end('{"ok":true}');
           } catch (e) { if (existsSync(tmp)) unlinkSync(tmp); throw e; }
           finally { uploads.delete(file); reservedBytes -= length; }
           return;
@@ -331,7 +388,7 @@ export function createServer({ dataDir = process.env.DATA_DIR || './data', port 
     ws.on('close', () => { clearTimeout(deadline); if (context && peers.get(context.member.id)?.ws === ws) { releaseFloor(context.s, context.member.id); peers.delete(context.member.id); metric(context.s, context.member, 'offline'); broadcast(context.s); } });
     ws.on('error', () => {});
   });
-  function removeAudio(c) { for (const f of readdirSync(dataDir)) if (f.startsWith(c + '-') && (f.endsWith('.mp3') || f.endsWith('.mp4') || f.endsWith('.tmp'))) try { unlinkSync(join(dataDir, f)); } catch {} }
+  function removeAudio(c) { for (const f of readdirSync(dataDir)) if (f.startsWith(c + '-') && /\.(mp3|mp4|tmp|part)$/.test(f)) try { unlinkSync(join(dataDir, f)); } catch {} }
   const cleanup = setInterval(() => {
     for (const [c, s] of sessions) if (s.expiresAt < now()) { releaseFloor(s); sessions.delete(c); removeAudio(c); db.prepare('DELETE FROM sessions WHERE code=?').run(c); for (const m of s.members) peers.get(m.id)?.ws.close(4001, 'Session expired'); }
     for (const [key, a] of rates) if (now() - a.at(-1) > 60000) rates.delete(key);

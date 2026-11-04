@@ -1,5 +1,7 @@
 # CarSync Music
 
+Current local review: **1.9.2**, built on the upstream **1.9.1** release. See the [connection/upload changes and two-phone test checklist](docs/releases/1.9.2.md). Existing servers stay compatible; resumable transfers require the accompanying backend update.
+
 **by Brayo** · Created and maintained by **Brayo**
 Contact: **+254 740 636 336** · [GitHub: moses-code-master](https://github.com/moses-code-master)
 
