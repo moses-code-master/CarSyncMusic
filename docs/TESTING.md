@@ -4,9 +4,9 @@
 
 Backend: `cd backend`, `npm ci`, `npm test`. Tests open real HTTP/WebSocket connections to ephemeral-port servers and temporary SQLite databases. They verify scheduled timing, both clients' identical frames, pause/seek/skip, duplicate protection, guest permissions, reconnect snapshots, MP3 relay integrity/ranges, missing tracks and configurable multi-guest capacity. The relay fixture tests transfer integrity; it is not a playable MP3 or audio test.
 
-Android: in `android`, run `gradlew testDebugUnitTest assembleDebug`. JVM tests cover clock offsets, rejection of delay outliers, pause/play projection and bounded drift correction. Build success is a compilation check, not a hardware media test.
+Android: in `android`, run `gradlew testInternalDebugUnitTest assembleInternalDebug`. JVM tests cover clock offsets, rejection of delay outliers, pause/play projection and bounded drift correction. Build success is a compilation check, not a hardware media test.
 
-Native runtime: start the backend on port 8080, run an Android emulator, and execute `gradlew connectedDebugAndroidTest`. Tests use `http://10.0.2.2:8080`, original playable MP3 fixtures, and real ExoPlayer decoders. GitHub runs this suite on API 26 and 35. It covers local/service/host/guest playback and missing-file relay recovery; API 35 also exercises phone MediaStore scanning. See VALIDATION.md for completed results. This does not measure physical speaker output.
+Native runtime: start the backend on port 8080, run an Android emulator, and execute `gradlew connectedInternalDebugAndroidTest`. Tests use `http://10.0.2.2:8080`, original playable MP3 fixtures, and real ExoPlayer decoders. CI is configured for API 23, 26, 35 and 36; the new matrix still requires execution on the final commit. It covers local/service/host/guest playback and missing-file relay recovery; API 35 also exercises phone MediaStore scanning. See VALIDATION.md for completed results. This does not measure physical speaker output.
 
 ## Setup and measurements
 

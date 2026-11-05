@@ -1,6 +1,6 @@
 # CarSync Music
 
-Current local review: **1.9.2**, built on the upstream **1.9.1** release. See the [connection/upload changes and two-phone test checklist](docs/releases/1.9.2.md). Existing servers stay compatible; resumable transfers require the accompanying backend update.
+Current local review: **1.9.3** — [Play release foundations, Android Auto and privacy](docs/PLAY-RELEASE.md). Built on the 1.9.1/1.9.2 source with upload recovery retained. Public deployment and device/Play review remain separate steps.
 
 **by Brayo** · Created and maintained by **Brayo**
 Contact: **+254 740 636 336** · [GitHub: moses-code-master](https://github.com/moses-code-master)
@@ -11,14 +11,14 @@ Native Kotlin/Compose Android music app plus a self-hosted Node.js/WebSocket rel
 
 ## Video playback
 
-Version 1.6.0 includes the synchronized local-video features described in the [video guide](docs/VIDEO-GUIDE.md), plus multi-guest music sharing. Video files must be imported identically on every device; video relay remains disabled. Parked-picture restrictions and existing compatibility limits remain.
+The current review supports local video and approved MP4 relay sharing (up to 100 MB per relayed file). Other video formats require matching local copies. Video is blocked on the Android Auto media surface; phone/head-unit pictures require the existing parked safeguards. The [1.9.3 release guide](docs/PLAY-RELEASE.md) is current; the older video guide describes the earlier local-only release.
 
 Review screenshots: [Video Library](docs/previews/video-library.png) · [Video Player](docs/previews/video-player-portrait.png) · [Fullscreen landscape](docs/previews/video-player-fullscreen.png). These are emulator captures of the working player. The cloud backend includes the matching media protocol and multi-guest update.
 
 ## Your live cloud setup
 
 - Public source: [moses-code-master/CarSyncMusic](https://github.com/moses-code-master/CarSyncMusic)
-- APK: [v1.6.0 test release — multiple guests](https://github.com/moses-code-master/CarSyncMusic/releases/tag/v1.6.0)
+- Current candidate: 1.9.3 internal APK and separately signed Play AAB, built from this source. Older GitHub release assets may contain earlier versions; check Settings → About before installing.
 - Server address prefilled in Settings on BOTH cars: `https://carsync-music.onrender.com`
 - [Server health check](https://carsync-music.onrender.com/health)
 
@@ -26,11 +26,11 @@ The cloud backend is deployed on Render's Free plan in Frankfurt, without a paid
 
 ## Group music sharing
 
-Version 1.6.0 supports one host plus up to **10 guests**. Every guest joins the same session code. The host taps **Share music with guests** once, and all guests can stream the shared MP3s. Connected Cars lists every participant. [Group setup, limits and update notes](docs/releases/1.6.0.md).
+The current server supports one host plus up to **10 guests**. Every guest joins the same session code. The host taps **Share music with guests** once, and all guests can stream the shared MP3s. Connected Cars lists every participant. [Group setup, limits and update notes](docs/releases/1.6.0.md).
 
 ## Music setup
 
-These music instructions apply to the 1.6.0 test build. Every guest joins the same host session. For local video setup, use the [video guide](docs/VIDEO-GUIDE.md).
+These steps cover basic music setup. See the current release guide for guest contributions, upload recovery, host handover and Play release requirements. Every guest joins the same host session. For local video setup, use the [video guide](docs/VIDEO-GUIDE.md).
 
 1. Install Node.js 24 LTS on a laptop or server.
 2. In `backend`, run `npm ci`, then `npm start`. Server listens on port 8080. Keep it running during the trip.
@@ -48,13 +48,13 @@ Local-only playback: open Library and tap a song without joining a session. Volu
 
 When upgrading from v1.0.0, uninstall the old app first because its signing key differs; this clears its saved library and session. Then install the current APK and scan/import music again. Versions 1.1 and newer update in place with the persistent private test signing key; do not uninstall these versions to install the review APK. Copy the APK to USB or internal storage, open it with the head unit file manager, and allow installation from that file manager when prompted. The APK uses a non-debuggable release build signed with that same key. For a separately distributed fork, use your own private keystore. Do not install while driving.
 
-For USB debugging, `adb install -r CarSyncMusic-debug.apk`. Allow notification permission on Android 13+ to see media controls. Some manufacturers require allowing background activity or disabling battery restrictions for CarSync. Ordinary Android head units are supported; Android Auto projection / certified Android Automotive app integration is outside this project.
+For USB debugging, `adb install -r CarSyncMusic-debug.apk`. Allow notification permission on Android 13+ to see media controls. Some manufacturers require allowing background activity or disabling battery restrictions for CarSync. Ordinary Android head units are supported; Android Auto audio browsing is implemented in 1.9.3; physical car/DHU validation and automotive store review remain pending.
 
 ## If Android says “App not installed”
 
 - Check Settings → About phone → Android version. Version 1.2 supports Android 6.0 (API 23) and newer. Earlier versions of CarSync required Android 8. Android 5 and older remain unsupported by this build.
 - If version 1.0 is installed, uninstall it once before installing the new APK because its signing key differs. This clears the old app library/session; scan or import again afterward. Versions 1.1 and newer share the persistent signing key and can update in place.
-- Download the complete `CarSyncMusic.apk` asset from Releases; do not try installing a source ZIP. Allow “Install unknown apps” for the browser or file manager used to open it. Ensure sufficient free storage.
+- Use the APK from the matching review package; older Releases assets can have a lower version. Source ZIPs and Play AABs cannot be installed as ordinary APKs. Allow “Install unknown apps” for the browser or file manager used to open it. Ensure sufficient free storage.
 - The APK is universal and includes ARM 32-bit, ARM 64-bit, x86 and x86_64 native libraries. If installation still fails, record the exact Android version and installer message; USB debugging can provide the precise error with `adb install -r CarSyncMusic.apk`.
 
 For Xiaomi/Redmi phones: search Settings for “Install unknown apps”, select the browser or File Manager used to open the APK, and permit installation from that app. Menu locations differ by MIUI/HyperOS version; see [Xiaomi's official instructions](https://www.mi.com/global/support/faq/details/KA-06974/). A Redmi 12 is newer than the app's minimum requirement; “App not installed” on that model does not establish an Android-version problem.
@@ -69,11 +69,11 @@ A generic “CarSync Music has stopped” dialog does not identify the underlyin
 
 ## Build an APK
 
-Install Android Studio, JDK 17, SDK Platform 35 and Build Tools 35.0.0. Open `android` in Android Studio. Let Gradle sync. Use Build → Generate APK, or:
+Install Android Studio, JDK 17, SDK Platform 36 and Build Tools 35.0.0 or newer. Open `android` in Android Studio. Let Gradle sync. Use Build → Generate APK, or:
 
-Windows: `gradlew.bat assembleDebug testDebugUnitTest`
+Windows: `gradlew.bat assembleInternalDebug testInternalDebugUnitTest`
 
-Linux/macOS: `sh gradlew assembleDebug testDebugUnitTest`
+Linux/macOS: `sh gradlew assembleInternalDebug testInternalDebugUnitTest`
 
 APK: `android/app/build/outputs/apk/debug/app-debug.apk`. Set `ANDROID_HOME` to your SDK, or create a local `android/local.properties` containing `sdk.dir=<SDK path>` (use forward slashes on Windows). A machine-specific local.properties is excluded from the source archive.
 

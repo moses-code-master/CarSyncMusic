@@ -11,9 +11,11 @@ import { createHash } from 'node:crypto';
 import { pathToFileURL } from 'node:url';
 import { token, digest, code, now, effective, position, schedule, validatePlaylist } from './model.mjs';
 import { advertiseLanRelay } from './mdns.mjs';
+import { handoverHost } from './host-handover.mjs';
 
-export function createServer({ dataDir = process.env.DATA_DIR || './data', port = Number(process.env.PORT || 8080), maxGuests = Number(process.env.MAX_GUESTS || 10) } = {}) {
+export function createServer({ dataDir = process.env.DATA_DIR || './data', port = Number(process.env.PORT || 8080), maxGuests = Number(process.env.MAX_GUESTS || 10), hostHandoverMs = 45000 } = {}) {
   if (!Number.isInteger(maxGuests) || maxGuests < 1 || maxGuests > 50) throw Error('MAX_GUESTS must be an integer from 1 to 50');
+  if (!Number.isFinite(hostHandoverMs) || hostHandoverMs < 0 || hostHandoverMs > 600000) throw Error('Invalid host handover grace period');
   mkdirSync(dataDir, { recursive: true });
   const db = new DatabaseSync(join(dataDir, 'sessions.sqlite'));
   db.exec('PRAGMA journal_mode=WAL; CREATE TABLE IF NOT EXISTS sessions(code TEXT PRIMARY KEY, body TEXT NOT NULL)');
@@ -23,7 +25,8 @@ export function createServer({ dataDir = process.env.DATA_DIR || './data', port 
   const metric = (s, m, event, status = {}) => { if (!closing) db.prepare('INSERT INTO telemetry VALUES(?,?,?,?,?,?,?,?)').run(s.code, m.id, now(), event, status.driftMs ?? null, status.rttMs ?? null, status.buffered ? 1 : 0, status.missing ? 1 : 0); };
   const sessions = new Map(), peers = new Map(), rates = new Map();
   const guestReservations = new Map(); // Session-scoped upload grants expire after 5 minutes.
-  const capabilities = ['convoy_ptt_mulaw_v1', 'convoy_ptt_pcm16_v1', 'convoy_location_v1', 'convoy_votes_v1', 'guest_music_upload_v1', 'guest_media_batch_v1', 'guest_video_mp4_v1', 'resumable_media_upload_v1'];
+  const hostOfflineAt = new Map();
+  const capabilities = ['convoy_ptt_mulaw_v1', 'convoy_ptt_pcm16_v1', 'convoy_location_v1', 'convoy_votes_v1', 'guest_music_upload_v1', 'guest_media_batch_v1', 'guest_video_mp4_v1', 'resumable_media_upload_v1', 'host_handover_v1'];
   // Ephemeral voice floor and position data never enter the session database.
   const floors = new Map(), frameRates = new Map();
   const announce = (session, payload, exceptId = null) => {
@@ -59,7 +62,7 @@ export function createServer({ dataDir = process.env.DATA_DIR || './data', port 
     const s = JSON.parse(row.body);
     // A restart invalidates the server time anchor: recover paused instead of guessing elapsed audio.
     s.frame = { ...s.frame, positionMs: position(effective(s, now()), now()), playing: false, executeAt: now(), revision: s.frame.revision + 1 }; s.previous = null;
-    if (s.expiresAt > now()) { s.guestAdditions ||= false; sessions.set(s.code, s); }
+    if (s.expiresAt > now()) { s.guestAdditions ||= false; sessions.set(s.code, s); hostOfflineAt.set(s.code, now()); }
     else { db.prepare('DELETE FROM sessions WHERE code=?').run(s.code); removeAudio(s.code); }
   }
   for (const f of readdirSync(dataDir)) if (/^\d{6}-[a-f0-9]{64}\.[A-Za-z0-9_-]+\.tmp$/.test(f)) unlinkSync(join(dataDir, f));
@@ -88,6 +91,20 @@ export function createServer({ dataDir = process.env.DATA_DIR || './data', port 
     const msg = { type: 'cars', cars: cars(s), serverNow: now() };
     s.members.forEach(m => { const p = peers.get(m.id); if (p) send(p.ws, msg); });
   };
+  const maybeHandover = s => {
+    if (closing || !sessions.has(s.code) || s.expiresAt <= now()) return;
+    if (!s.hostHandoverEnabled) return;
+    const host = s.members.find(member => member.role === 'host');
+    if (host && peers.has(host.id)) { hostOfflineAt.delete(s.code); return; }
+    if (!hostOfflineAt.has(s.code)) hostOfflineAt.set(s.code, now());
+    const video = s.playlist.some(track => track.mediaType === 'video');
+    const eligible = new Set(s.members.filter(member => {
+      const peer = peers.get(member.id);
+      return peer?.handover && (!video || peer.video);
+    }).map(member => member.id));
+    const changed = handoverHost(s, eligible, hostOfflineAt.get(s.code), now(), hostHandoverMs);
+    if (changed) { hostOfflineAt.delete(s.code); save(s); announce(s, { type: 'host_changed', ...changed }); broadcast(s); }
+  };
   function auth(req, sessionCode) {
     const s = sessions.get(sessionCode);
     if (!s || s.expiresAt < now()) return null;
@@ -108,6 +125,10 @@ export function createServer({ dataDir = process.env.DATA_DIR || './data', port 
     res.setHeader('Cache-Control', 'no-store'); res.setHeader('X-Content-Type-Options', 'nosniff');
     try {
       const path = new URL(req.url, 'http://local').pathname;
+      if (['/privacy', '/privacy.txt'].includes(path) && ['GET','HEAD'].includes(req.method)) {
+        res.setHeader('Content-Type', 'text/plain; charset=utf-8');
+        res.end(req.method === 'HEAD' ? '' : readFileSync(new URL('../public/privacy-policy.txt', import.meta.url))); return;
+      }
       if (path === '/health' && req.method === 'GET') {
         res.setHeader('Content-Type','application/json');
         res.end(JSON.stringify({ok:true, protocol:'convoy-v1', capabilities})); return;
@@ -265,8 +286,19 @@ export function createServer({ dataDir = process.env.DATA_DIR || './data', port 
           if (b.type !== 'auth' || typeof b.token !== 'string') throw Error('Authentication required');
           const s = sessions.get(b.code), member = s?.members.find(m => m.tokenHash === digest(b.token));
           if (!member || s.expiresAt < now()) { ws.close(4003, 'Invalid or expired session'); return; }
+          if (member.role === 'host') {
+            const enabled = Array.isArray(b.sessionCapabilities) && b.sessionCapabilities.includes('host_handover_v1');
+            if (s.hostHandoverEnabled !== enabled) { s.hostHandoverEnabled = enabled; save(s); }
+          }
           context = { s, member }; clearTimeout(deadline);
-          peers.get(member.id)?.ws.close(4002, 'Another connection resumed this car'); releaseFloor(s, member.id); peers.set(member.id, { ws, video: Array.isArray(b.mediaCapabilities) && b.mediaCapabilities.includes('video'), compactVoice: Array.isArray(b.voiceCodecs) && b.voiceCodecs.includes('mulaw16') }); metric(s, member, 'online'); broadcast(s); return;
+          peers.get(member.id)?.ws.close(4002, 'Another connection resumed this car'); releaseFloor(s, member.id);
+          peers.set(member.id, { ws, video: Array.isArray(b.mediaCapabilities) && b.mediaCapabilities.includes('video'), compactVoice: Array.isArray(b.voiceCodecs) && b.voiceCodecs.includes('mulaw16'), handover: Array.isArray(b.sessionCapabilities) && b.sessionCapabilities.includes('host_handover_v1') });
+          metric(s, member, 'online'); send(ws, {type:'identity',memberId:member.id,role:member.role}); maybeHandover(s); broadcast(s);
+          // A joining car missed the original start event; restore ducking and
+          // speaker status before subsequent voice frames arrive.
+          const currentFloor = floors.get(s.code);
+          if (currentFloor && currentFloor.memberId !== member.id) send(ws, {type:'ptt_start',speakerId:currentFloor.memberId,name:s.members.find(m=>m.id===currentFloor.memberId)?.name || 'Convoy speaker'});
+          return;
         }
         const { s, member } = context;
         if (s.expiresAt < now() || !sessions.has(s.code)) { ws.close(4001, 'Session expired'); return; }
@@ -385,11 +417,12 @@ export function createServer({ dataDir = process.env.DATA_DIR || './data', port 
         s.seen.push(b.id); s.seen = s.seen.slice(-512); save(s); send(ws, { type: 'ack', id: b.id }); broadcast(s);
       } catch (e) { send(ws, { type: 'error', error: e.message }); }
     });
-    ws.on('close', () => { clearTimeout(deadline); if (context && peers.get(context.member.id)?.ws === ws) { releaseFloor(context.s, context.member.id); peers.delete(context.member.id); metric(context.s, context.member, 'offline'); broadcast(context.s); } });
+    ws.on('close', () => { clearTimeout(deadline); if (context && peers.get(context.member.id)?.ws === ws) { releaseFloor(context.s, context.member.id); peers.delete(context.member.id); if (!closing && context.member.role === 'host') hostOfflineAt.set(context.s.code, now()); metric(context.s, context.member, 'offline'); broadcast(context.s); } });
     ws.on('error', () => {});
   });
   function removeAudio(c) { for (const f of readdirSync(dataDir)) if (f.startsWith(c + '-') && /\.(mp3|mp4|tmp|part)$/.test(f)) try { unlinkSync(join(dataDir, f)); } catch {} }
   const cleanup = setInterval(() => {
+    for (const code of hostOfflineAt.keys()) if (!sessions.has(code)) hostOfflineAt.delete(code);
     for (const [c, s] of sessions) if (s.expiresAt < now()) { releaseFloor(s); sessions.delete(c); removeAudio(c); db.prepare('DELETE FROM sessions WHERE code=?').run(c); for (const m of s.members) peers.get(m.id)?.ws.close(4001, 'Session expired'); }
     for (const [key, a] of rates) if (now() - a.at(-1) > 60000) rates.delete(key);
     for (const [key, value] of guestReservations) if (value.expiresAt < now()) guestReservations.delete(key);
@@ -398,6 +431,7 @@ export function createServer({ dataDir = process.env.DATA_DIR || './data', port 
   // The timeline advances even when the host process is killed or loses connectivity.
   const advance = setInterval(() => {
     for (const s of sessions.values()) {
+      maybeHandover(s);
       const at = now(), f = effective(s, at), track = s.playlist[f.index];
       if (track && f.playing && at >= s.frame.executeAt && position(f, at) >= track.durationMs) {
         if (schedule(s, { kind: 'ended', revision: f.revision, index: f.index }, at)) { save(s); broadcast(s); }

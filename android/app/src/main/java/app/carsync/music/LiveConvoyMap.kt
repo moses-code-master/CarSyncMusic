@@ -85,7 +85,7 @@ fun LiveConvoyMap(
             Button(onClick = {
                 val granted = ContextCompat.checkSelfPermission(context, Manifest.permission.ACCESS_FINE_LOCATION) == PackageManager.PERMISSION_GRANTED ||
                     ContextCompat.checkSelfPermission(context, Manifest.permission.ACCESS_COARSE_LOCATION) == PackageManager.PERMISSION_GRANTED
-                if (granted) sync.toggleRadar(true) else requestLocation()
+                requestLocation()
             }) { Text("Share my position with the convoy") }
             Text("GPS sharing is OFF on this phone. Enable it on each car whose location you want to display.",
                 color = MapWarning, fontSize = 12.sp)

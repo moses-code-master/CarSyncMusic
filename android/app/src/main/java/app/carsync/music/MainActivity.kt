@@ -43,6 +43,7 @@ import java.io.File
 
 class MainActivity : ComponentActivity() {
     private var controller: ListenableFuture<MediaController>? = null
+    private var pendingMediaSearch: String? = null
     private val sync get() = (application as CarSyncApp).sync
     override fun onCreate(savedInstanceState: Bundle?) {
         super.onCreate(savedInstanceState)
@@ -55,11 +56,16 @@ class MainActivity : ComponentActivity() {
         super.onStart()
         val future = MediaController.Builder(this, SessionToken(this, ComponentName(this, PlaybackService::class.java))).buildAsync()
         controller = future
-        future.addListener({ try { future.get() } catch (e: Exception) { sync.message("Audio service could not start: ${e.cause?.message ?: e.message}") } }, ContextCompat.getMainExecutor(this))
+        future.addListener({ try { future.get(); pendingMediaSearch?.let { query -> pendingMediaSearch = null; sync.playAudioSearch(query) } } catch (e: Exception) { sync.message("Audio service could not start: ${e.cause?.message ?: e.message}") } }, ContextCompat.getMainExecutor(this))
     }
     override fun onStop() { sync.revokeParked(); controller?.let { MediaController.releaseFuture(it) }; controller = null; super.onStop() }
     override fun onNewIntent(intent: Intent) { super.onNewIntent(intent); acceptLink(intent) }
     private fun acceptLink(intent: Intent) {
+        if (intent.action == "android.media.action.MEDIA_PLAY_FROM_SEARCH") {
+            val query = intent.getStringExtra(android.app.SearchManager.QUERY).orEmpty().take(200)
+            if (sync.state.value.serviceReady) sync.playAudioSearch(query) else pendingMediaSearch = query
+            return
+        }
         if (intent.data?.scheme == "carsync") { sync.invitation(intent.data!!); return }
         val uris = when (intent.action) {
             Intent.ACTION_VIEW -> listOfNotNull(intent.data)
@@ -80,6 +86,7 @@ private val pages = listOf("Home", "Music Library", "Playlists", "Create Session
 @Composable fun CarSyncScreen(sync: SyncCoordinator) {
     val s by sync.state.collectAsStateWithLifecycle()
     var page by rememberSaveableCompat("Home")
+    LaunchedEffect(s.driving) { if (s.driving) page = "Now Playing" }
     val pageScroll = rememberScrollState()
     LaunchedEffect(page) { pageScroll.scrollTo(0) }
     var search by remember { mutableStateOf("") }
@@ -92,6 +99,8 @@ private val pages = listOf("Home", "Music Library", "Playlists", "Create Session
     var latency by remember(s.latencyMs) { mutableStateOf(s.latencyMs.toString()) }
     LaunchedEffect(s.invitationCode) { if (s.invitationCode.isNotBlank()) page = "Join Session" }
     val context = androidx.compose.ui.platform.LocalContext.current
+    var showLocationDisclosure by remember { mutableStateOf(false) }
+    var localDiagnosticsEnabled by remember { mutableStateOf(LocalDiagnostics.enabled(context)) }
     var showVoiceDialog by remember { mutableStateOf(false) }
     var voiceParkedConfirmed by remember { mutableStateOf(false) }
     var allowSystemSpeechProvider by remember { mutableStateOf(false) }
@@ -181,6 +190,7 @@ private val pages = listOf("Home", "Music Library", "Playlists", "Create Session
         if (result.values.any { it }) sync.toggleRadar(true) else sync.message("Location permission denied.")
     }
     val metricsExport = rememberLauncherForActivityResult(ActivityResultContracts.CreateDocument("text/csv")) { uri -> if (uri != null) sync.exportMetrics(uri) }
+    val diagnosticsExport = rememberLauncherForActivityResult(ActivityResultContracts.CreateDocument("text/plain")) { uri -> if (uri != null) sync.exportLocalDiagnostics(uri) }
     val qrImport = rememberLauncherForActivityResult(ActivityResultContracts.OpenDocument()) { uri ->
         if (uri != null) try {
             val bmp = context.contentResolver.openInputStream(uri)?.use { BitmapFactory.decodeStream(it) } ?: error("Cannot read QR image")
@@ -193,6 +203,17 @@ private val pages = listOf("Home", "Music Library", "Playlists", "Create Session
     }
     val colors = darkColorScheme(primary = Accent, onPrimary = Color(0xFF162609), background = Color(0xFF0B1016), surface = Panel, onSurface = Color(0xFFF2F5FA), secondary = Color(0xFF92BFFF))
     MaterialTheme(colorScheme = colors) {
+        if (showLocationDisclosure) AlertDialog(
+            onDismissRequest = { showLocationDisclosure = false },
+            title = { Text("Share your location with this convoy?") },
+            text = { Text("CarSync sends your GPS position, speed, bearing and accuracy to the selected relay and other cars in this session. Sharing continues while the app is minimized, with a location notification. Stop sharing or leave the session to stop updates. Opening the map also requests map areas from the map provider. Location sharing is optional.") },
+            confirmButton = { TextButton(onClick = {
+                showLocationDisclosure = false; sync.acceptLocationDisclosure()
+                if (ContextCompat.checkSelfPermission(context, Manifest.permission.ACCESS_COARSE_LOCATION) == android.content.pm.PackageManager.PERMISSION_GRANTED || ContextCompat.checkSelfPermission(context, Manifest.permission.ACCESS_FINE_LOCATION) == android.content.pm.PackageManager.PERMISSION_GRANTED) sync.toggleRadar(true)
+                else locationRequest.launch(arrayOf(Manifest.permission.ACCESS_FINE_LOCATION, Manifest.permission.ACCESS_COARSE_LOCATION))
+            }) { Text("Share location") } },
+            dismissButton = { TextButton(onClick = { showLocationDisclosure = false }) { Text("Not now") } }
+        )
         if (showVoiceDialog) AlertDialog(
             onDismissRequest = { speechController.close(); showVoiceDialog = false },
             title = { Text("CarSync Voice Commands") },
@@ -254,12 +275,12 @@ private val pages = listOf("Home", "Music Library", "Playlists", "Create Session
         }, bottomBar = {
             Column(Modifier.fillMaxWidth().background(Panel)) {
                 if (s.busy) LinearProgressIndicator(Modifier.fillMaxWidth())
-                Text(s.uploadProgress.ifBlank { s.message }, color = if (s.audioError.isNotBlank()) Color(0xFFFFB19F) else Muted, fontSize = if (page == "Home") 11.sp else 13.sp, maxLines = if (page == "Home") 1 else 3, overflow = TextOverflow.Ellipsis, modifier = Modifier.padding(horizontal = 16.dp, vertical = if (page == "Home") 4.dp else 8.dp))
-                if (s.pendingGuestSong.isNotBlank() && !s.busy && s.connected) TextButton(onClick = { sync.retryGuestUpload() }) { Text("Retry upload") }
+                Text(s.uploadProgress.ifBlank { s.message }, color = if (s.audioError.isNotBlank()) Color(0xFFFFB19F) else Muted, fontSize = if (s.driving) 16.sp else if (page == "Home") 11.sp else 13.sp, maxLines = if (s.driving) 2 else if (page == "Home") 1 else 3, overflow = TextOverflow.Ellipsis, modifier = Modifier.padding(horizontal = 16.dp, vertical = if (page == "Home") 4.dp else 8.dp))
+                if (s.pendingGuestSong.isNotBlank() && !s.busy && s.connected && !s.driving) TextButton(onClick = { sync.retryGuestUpload() }) { Text("Retry upload") }
                 NavigationBar(containerColor = Color(0xFF10171F)) {
-                    val nav = listOf("Home" to Icons.Default.Home, "Music Library" to Icons.Default.List, "Videos" to Icons.Default.PlayArrow, "Now Playing" to Icons.Default.PlayArrow, "Create Session" to Icons.Default.Share, "Settings" to Icons.Default.Settings)
-                    val labels = mapOf("Home" to "Home", "Music Library" to "Library", "Videos" to "Videos", "Now Playing" to "Player", "Create Session" to "Session", "Settings" to "Settings")
-                    nav.forEach { (target, icon) -> NavigationBarItem(selected = page == target || (target == "Create Session" && page in listOf("Join Session", "Connected Cars")) || (target == "Music Library" && page == "Playlists") || (target == "Settings" && page in listOf("About", "License")), onClick = { page = target }, icon = { if (target == "Videos") Icon(painterResource(R.drawable.ic_video), target) else Icon(icon, target) }, label = { Text(labels.getValue(target), fontSize = 10.sp, maxLines = 1) }) }
+                    val nav = if (s.driving) listOf("Now Playing" to Icons.Default.PlayArrow, "Connected Cars" to Icons.Default.Share, "Settings" to Icons.Default.Settings) else listOf("Home" to Icons.Default.Home, "Music Library" to Icons.Default.List, "Videos" to Icons.Default.PlayArrow, "Now Playing" to Icons.Default.PlayArrow, "Create Session" to Icons.Default.Share, "Settings" to Icons.Default.Settings)
+                    val labels = mapOf("Home" to "Home", "Music Library" to "Library", "Videos" to "Videos", "Now Playing" to "Player", "Create Session" to "Session", "Connected Cars" to "Cars", "Settings" to "Settings")
+                    nav.forEach { (target, icon) -> NavigationBarItem(selected = page == target || (target == "Create Session" && page in listOf("Join Session", "Connected Cars")) || (target == "Music Library" && page == "Playlists") || (target == "Settings" && page in listOf("About", "License", "Privacy")), onClick = { page = target }, icon = { if (target == "Videos") Icon(painterResource(R.drawable.ic_video), target) else Icon(icon, target) }, label = { Text(labels.getValue(target), fontSize = if (s.driving) 15.sp else 10.sp, maxLines = 1) }) }
                 }
             }
         }) { insets ->
@@ -383,7 +404,7 @@ private val pages = listOf("Home", "Music Library", "Playlists", "Create Session
                             }
                         }
                     }
-                    "Live Map" -> { LiveConvoyMap(s, sync, { page = "Connected Cars" }, { page = "Home" }, { locationRequest.launch(arrayOf(Manifest.permission.ACCESS_FINE_LOCATION, Manifest.permission.ACCESS_COARSE_LOCATION)) }) }
+                    "Live Map" -> { LiveConvoyMap(s, sync, { page = "Connected Cars" }, { page = "Home" }, { showLocationDisclosure = true }) }
                     "Connected Cars" -> {
                         Title("Travelling together", "Drift is measured against the server timeline; it does not measure speaker or Bluetooth delay.")
                         if (s.connected) Text("${s.cars.count { it.role == "guest" && it.online }} guests online · ${s.cars.count { it.role == "guest" }}/${s.maxGuests} guest places used", color = Accent, fontSize = 20.sp)
@@ -405,17 +426,19 @@ private val pages = listOf("Home", "Music Library", "Playlists", "Create Session
                         if (s.cars.isEmpty()) Text("Create or join a session to see the host and all guests.")
                         LargeButton(if (s.radarEnabled) "Stop location sharing" else "Share live convoy location", s.connected && s.supportsRadar && (!s.driving || s.radarEnabled)) {
                             if (s.radarEnabled) sync.toggleRadar(false)
-                            else if (ContextCompat.checkSelfPermission(context, Manifest.permission.ACCESS_FINE_LOCATION) ==
-                                android.content.pm.PackageManager.PERMISSION_GRANTED ||
-                                ContextCompat.checkSelfPermission(context, Manifest.permission.ACCESS_COARSE_LOCATION) ==
-                                android.content.pm.PackageManager.PERMISSION_GRANTED) sync.toggleRadar(true)
-                            else locationRequest.launch(arrayOf(Manifest.permission.ACCESS_FINE_LOCATION, Manifest.permission.ACCESS_COARSE_LOCATION))
+                            else showLocationDisclosure = true
                         }
                         Text("Location is opt-in and only transmitted during a session.", color = Muted)
                         if (s.connected && !s.supportsRadar) Text("GPS radar requires the updated convoy server.", color = Color(0xFFFFBF7A))
                     }
                     "Settings" -> {
                         if (!s.driving) LargeButton("About CarSync Music") { page = "About" }
+                        if (!s.driving) {
+                            LargeButton("Privacy and data use") { page = "Privacy" }
+                            SettingToggle("Local crash diagnostics", localDiagnosticsEnabled, "Optional, stored on this device only. Reports omit exception messages, voice, GPS and session tokens. Nothing is automatically uploaded.") { enabled -> localDiagnosticsEnabled = enabled; LocalDiagnostics.enabled(context, enabled) }
+                            LargeButton("Export local diagnostic report") { launchPickerSafely({ diagnosticsExport.launch("carsync-local-diagnostics.txt") }) { sync.message("No file picker available for report export.") } }
+                            LargeButton("Clear local diagnostics") { LocalDiagnostics.clear(context); sync.message("Local diagnostics cleared.") }
+                        }
                         if (!s.driving) {
                             Text("The CarSync production cloud server is included automatically. Just create or join a session; no URL setup is needed. Optional local Wi-Fi relay discovery requires a separately running server.", color = Muted)
                             LargeButton(if (s.localSearchActive) "Searching local Wi-Fi…" else "Find local Wi-Fi relay (optional)", !s.localSearchActive) { sync.beginDiscovery() }
@@ -491,10 +514,11 @@ private val pages = listOf("Home", "Music Library", "Playlists", "Create Session
                                 LargeButton("Leave session") { sync.leave() }
                                 if (s.role == "host") LargeButton("End session for everyone") { sync.endSession() }
                             }
-                            Text("No Google Play Services required. Intended for head units that install ordinary Android APKs; this is not an Android Auto projection app.", color = Muted)
+                            Text("No Google Play Services dependency. Android Auto offers audio browsing; setup, video and convoy permissions stay on the phone.", color = Muted)
                         }
                     }
                     "About" -> AboutScreen({ page = "License" }, sync::message)
+                    "Privacy" -> { LargeButton("Back to Settings") { page = "Settings" }; Text(remember { context.assets.open("privacy-policy.txt").bufferedReader().use { it.readText() } }, color = Muted, fontSize = 15.sp) }
                     "License" -> { LargeButton("Back to About") { page = "About" }; ProjectLicenseScreen() }
                 }
             }
@@ -606,7 +630,7 @@ private val pages = listOf("Home", "Music Library", "Playlists", "Create Session
     if (!s.driving) Slider(value = seeking ?: s.positionMs.toFloat().coerceIn(0f, t.durationMs.toFloat()), onValueChange = { seeking = it }, onValueChangeFinished = { seeking?.let { sync.command("seek", it.toLong()) }; seeking = null }, valueRange = 0f..t.durationMs.toFloat().coerceAtLeast(1f), enabled = s.canControl, modifier = Modifier.height(if (compact) 32.dp else 56.dp))
     Text("${time(s.positionMs)} / ${time(t.durationMs)}", color = Muted)
     Text("Local volume", color = Muted)
-    Slider(s.volume, { sync.volume(it) }, modifier = Modifier.height(56.dp))
+    Slider(s.volume, { sync.volume(it) }, modifier = Modifier.height(if (s.driving) 72.dp else 56.dp))
     if (s.audioError.isNotBlank()) Text(s.audioError, color = Color(0xFFFFB19F))
     Text(if (s.role == "local") "On this device · no internet needed" else if (s.clockReady) "Player drift: ${s.driftMs?.let { "$it ms" } ?: "Measuring"} · RTT ${s.rttMs} ms" else "Matching clocks… playback will start when ready", color = Muted)
 }
@@ -632,9 +656,9 @@ private val pages = listOf("Home", "Music Library", "Playlists", "Create Session
     }
 }
 @Composable private fun Title(title: String, subtitle: String) { Text(title, fontSize = 30.sp, fontWeight = FontWeight.Bold); Text(subtitle, color = Muted, fontSize = 18.sp) }
-@Composable private fun LargeButton(text: String, enabled: Boolean = true, click: () -> Unit) { Button(click, enabled = enabled, shape = RoundedCornerShape(14.dp), modifier = Modifier.heightIn(min = 58.dp)) { Text(text, fontSize = 17.sp) } }
+@Composable private fun LargeButton(text: String, enabled: Boolean = true, click: () -> Unit) { Button(click, enabled = enabled, shape = RoundedCornerShape(14.dp), modifier = Modifier.heightIn(min = 72.dp)) { Text(text, fontSize = 17.sp) } }
 @Composable private fun Stat(label: String, value: String, modifier: Modifier) { Card(modifier) { Column(Modifier.padding(20.dp)) { Text(label, color = Muted, fontSize = 13.sp); Text(value, fontSize = 24.sp) } } }
-@Composable private fun SettingToggle(title: String, checked: Boolean, detail: String, changed: (Boolean) -> Unit) { Card(Modifier.fillMaxWidth()) { Row(Modifier.padding(16.dp), verticalAlignment = Alignment.CenterVertically) { Column(Modifier.weight(1f)) { Text(title, fontSize = 21.sp); Text(detail, color = Muted) }; Switch(checked, changed, Modifier.padding(start = 12.dp)) } } }
+@Composable private fun SettingToggle(title: String, checked: Boolean, detail: String, changed: (Boolean) -> Unit) { Card(Modifier.fillMaxWidth()) { Row(Modifier.heightIn(min = 72.dp).clickable { changed(!checked) }.padding(16.dp), verticalAlignment = Alignment.CenterVertically) { Column(Modifier.weight(1f)) { Text(title, fontSize = 21.sp); Text(detail, color = Muted) }; Switch(checked, changed, Modifier.padding(start = 12.dp)) } } }
 @Composable private fun rememberSaveableCompat(value: String) = androidx.compose.runtime.saveable.rememberSaveable { mutableStateOf(value) }
 private fun time(ms: Long): String = "%d:%02d".format(ms.coerceAtLeast(0) / 60000, ms.coerceAtLeast(0) / 1000 % 60)
 private fun qrBitmap(text: String): Bitmap {

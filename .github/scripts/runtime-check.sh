@@ -8,16 +8,16 @@ collect() {
   adb pull /sdcard/Download/CarSync-previews ../runtime-results/screenshots || true
 }
 trap collect EXIT
-sh gradlew assembleRelease --no-daemon
-adb install app/build/outputs/apk/release/app-release.apk
+sh gradlew assembleInternalRelease --no-daemon
+adb install app/build/outputs/apk/internal/release/app-internal-release.apk
 adb shell am start -W -n app.carsync.music/.MainActivity
 sleep 3
 adb shell ps -A | grep app.carsync.music || adb shell ps | grep app.carsync.music
 adb uninstall app.carsync.music
 adb install /tmp/carsync-previous.apk
-adb install -r app/build/outputs/apk/release/app-release.apk
+adb install -r app/build/outputs/apk/internal/release/app-internal-release.apk
 adb shell am start -W -n app.carsync.music/.MainActivity
 sleep 3
 adb shell ps -A | grep app.carsync.music || adb shell ps | grep app.carsync.music
 adb uninstall app.carsync.music
-sh gradlew connectedDebugAndroidTest --no-daemon
+sh gradlew connectedInternalDebugAndroidTest --no-daemon

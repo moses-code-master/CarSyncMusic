@@ -27,9 +27,11 @@
         <intent><action android:name="android.intent.action.GET_CONTENT" /><category android:name="android.intent.category.OPENABLE" /><data android:mimeType="video/*" /></intent>
     </queries>
     <application android:name=".CarSyncApp" android:theme="@style/AppTheme" android:label="CarSync Music" android:icon="@drawable/ic_carsync" android:allowBackup="false" android:usesCleartextTraffic="true" android:supportsRtl="true">
+        <meta-data android:name="com.google.android.gms.car.application" android:resource="@xml/automotive_app_desc" />
         <uses-library android:name="android.car" android:required="false" />
         <activity android:name=".MainActivity" android:exported="true" android:configChanges="keyboardHidden|orientation|screenSize">
             <intent-filter><action android:name="android.intent.action.MAIN" /><category android:name="android.intent.category.LAUNCHER" /></intent-filter>
+            <intent-filter><action android:name="android.media.action.MEDIA_PLAY_FROM_SEARCH" /><category android:name="android.intent.category.DEFAULT" /></intent-filter>
             <intent-filter android:autoVerify="false"><action android:name="android.intent.action.VIEW" /><category android:name="android.intent.category.DEFAULT" /><category android:name="android.intent.category.BROWSABLE" /><data android:scheme="carsync" android:host="join" /></intent-filter>
             <intent-filter><action android:name="android.intent.action.VIEW" /><category android:name="android.intent.category.DEFAULT" /><data android:scheme="content" /><data android:scheme="file" /><data android:mimeType="audio/*" /></intent-filter>
             <intent-filter><action android:name="android.intent.action.SEND" /><action android:name="android.intent.action.SEND_MULTIPLE" /><category android:name="android.intent.category.DEFAULT" /><data android:mimeType="audio/*" /></intent-filter>
@@ -39,7 +41,11 @@
         <service android:name=".ConvoyLocationService" android:exported="false" android:foregroundServiceType="location" />
         <service android:name=".ConvoyMicrophoneService" android:exported="false" android:foregroundServiceType="microphone" />
         <service android:name=".PlaybackService" android:foregroundServiceType="mediaPlayback" android:exported="true">
-            <intent-filter><action android:name="androidx.media3.session.MediaSessionService" /></intent-filter>
+            <intent-filter>
+                <action android:name="androidx.media3.session.MediaLibraryService" />
+                <action android:name="androidx.media3.session.MediaSessionService" />
+                <action android:name="android.media.browse.MediaBrowserService" />
+            </intent-filter>
         </service>
     </application>
 </manifest>

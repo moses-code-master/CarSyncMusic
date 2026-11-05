@@ -1,0 +1,32 @@
+CarSync Music by Brayo — Privacy notice
+Updated November 5, 2026
+
+Developer contact: Brayo, +254 740 636 336.
+
+Local use
+Imported music/video, playlists, settings, calibration and session credentials are stored on your device. Importing or playing a file locally does not upload it. You can remove imported media in the app or clear the app's storage in Android Settings. Device backups are disabled for this app.
+
+Joining and sharing
+Creating/joining a convoy sends your chosen car name, a session identity, playlist metadata and connection/playback diagnostics to the selected relay server. The relay can see your network IP address. Shared music/video is uploaded only when sharing is enabled and a file is approved for that session. Other session participants can stream those files. Only share recordings you have permission to distribute. A host may hand over to another connected car after a prolonged disconnection. A six-digit code is an invitation; share it only with people you trust.
+Public servers require HTTPS/WSS. An explicitly selected trusted local HTTP relay may use unencrypted local-network traffic. The relay operator can process relayed media, voice and location; the protocol is not end-to-end encrypted.
+
+Microphone and intercom
+Push-to-talk sends voice through your selected relay to other session participants while you hold Talk. The bundled relay processes voice in memory and does not record it to disk. Automatic acoustic calibration uses short microphone samples locally. Optional system speech recognition is provided by the recognition service installed on your device; if you permit a network speech provider, that provider may process voice under its own privacy terms. CarSync does not automatically enable network speech recognition.
+
+Location
+Location sharing is optional. After your consent and Android permission, CarSync sends your GPS position, approximate speed, bearing, accuracy and update time to your relay and other cars in the session. A location foreground service can continue while the app is minimized during that session, with a visible notification. Stop sharing or leave the session to stop updates. The bundled relay keeps recent positions in memory, removes them on opt-out/disconnect, and stops displaying stale positions. Locations are not written to its session database. Map tiles are requested from OpenStreetMap services; the map provider receives your IP address and the requested map area. Phone location works independently of loading map tiles.
+
+Retention and deletion
+The bundled relay expires sessions and playback telemetry after approximately 24 hours. Expiry cleanup normally runs each minute. Ending a session removes its uploaded/partial media, credentials and telemetry. Turning off sharing removes uploaded/partial media. Rate-limit IP identifiers are kept in server memory temporarily and are not written by the bundled application to disk. Hosting providers may retain infrastructure/access logs under their own policies. An operator of a custom relay controls that relay and its logs; contact that operator for access/deletion requests. CarSync cannot retrieve files that other people have separately copied.
+
+Optional diagnostics
+Local crash diagnostics are off by default. If enabled, the app stores the exception type and a bounded set of program stack frames in app-private storage. It excludes exception messages, voice, location, song titles and session credentials. No diagnostic report is automatically uploaded. You may clear the report or explicitly export it to a destination you choose. The latest report replaces the previous one. Synchronization telemetry can also be explicitly exported by the host.
+
+Advertising, payments and accounts
+This build has no advertisements, payment integration, analytics SDK or registered user accounts. It does not sell personal data or use data for advertising. Android/your device provider may offer separate system diagnostics settings.
+
+Permissions
+Media access is used to find files you choose to play. Microphone access supports Talk, calibration and optional voice commands. Location access supports opt-in convoy location sharing. Bluetooth access supports audio routes. Notification/foreground-service permissions support visible ongoing playback, microphone and location activity. You may deny or revoke optional permissions; local file import/playback remains available where the chosen file is accessible.
+
+Changes and support
+Review this notice when updating the app. For questions about this application, contact Brayo at the number above. For information held by a selected relay, include the operator and session details in your request without sharing your private session token.
