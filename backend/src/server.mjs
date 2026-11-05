@@ -125,6 +125,22 @@ export function createServer({ dataDir = process.env.DATA_DIR || './data', port 
     res.setHeader('Cache-Control', 'no-store'); res.setHeader('X-Content-Type-Options', 'nosniff');
     try {
       const path = new URL(req.url, 'http://local').pathname;
+      const webFiles = {
+        '/': ['index.html','text/html; charset=utf-8'],
+        '/app.js': ['app.js','text/javascript; charset=utf-8'],
+        '/timing.mjs': ['timing.mjs','text/javascript; charset=utf-8'],
+        '/style.css': ['style.css','text/css; charset=utf-8'],
+        '/manifest.webmanifest': ['manifest.webmanifest','application/manifest+json'],
+        '/sw.js': ['sw.js','text/javascript; charset=utf-8'],
+        '/icon.svg': ['icon.svg','image/svg+xml']
+      };
+      if (webFiles[path] && ['GET','HEAD'].includes(req.method)) {
+        const [file, mime] = webFiles[path];
+        res.setHeader('Content-Type',mime);
+        res.setHeader('Referrer-Policy','no-referrer');
+        res.setHeader('Content-Security-Policy',"default-src 'self'; script-src 'self'; style-src 'self'; connect-src 'self'; media-src 'self' blob:; img-src 'self' data:; object-src 'none'; base-uri 'none'; frame-ancestors 'none'");
+        res.end(req.method === 'HEAD' ? '' : readFileSync(new URL('../public/web/' + file, import.meta.url))); return;
+      }
       if (['/privacy', '/privacy.txt'].includes(path) && ['GET','HEAD'].includes(req.method)) {
         res.setHeader('Content-Type', 'text/plain; charset=utf-8');
         res.end(req.method === 'HEAD' ? '' : readFileSync(new URL('../public/privacy-policy.txt', import.meta.url))); return;
